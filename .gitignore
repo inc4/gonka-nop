@@ -1,0 +1,18 @@
+# Binary (root level only)
+/gonka-nop
+/gonka-nop-*
+
+# Output directory
+gonka-node/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Test output
+*.test
+coverage.out
