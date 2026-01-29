@@ -8,12 +8,12 @@ import (
 )
 
 var (
-	cyan    = color.New(color.FgCyan, color.Bold)
-	green   = color.New(color.FgGreen)
-	yellow  = color.New(color.FgYellow)
-	red     = color.New(color.FgRed)
-	bold    = color.New(color.Bold)
-	dimmed  = color.New(color.Faint)
+	cyan   = color.New(color.FgCyan, color.Bold)
+	green  = color.New(color.FgGreen)
+	yellow = color.New(color.FgYellow)
+	red    = color.New(color.FgRed)
+	bold   = color.New(color.Bold)
+	dimmed = color.New(color.Faint)
 )
 
 // Display prints the status in a formatted way
@@ -27,13 +27,13 @@ func Display(s *NodeStatus) {
 
 func printHeader(title string) {
 	fmt.Println()
-	cyan.Println(title)
-	dimmed.Println(repeat("─", len(title)+10))
+	_, _ = cyan.Println(title)
+	_, _ = dimmed.Println(repeat("─", len(title)+10))
 }
 
 func printSection(title string) {
 	fmt.Println()
-	bold.Println(title)
+	_, _ = bold.Println(title)
 }
 
 func printOverview(s *NodeStatus) {
@@ -147,22 +147,22 @@ func printMLNode(s *NodeStatus) {
 // Helper functions
 
 func printOK(format string, args ...interface{}) {
-	green.Print("  ✓ ")
+	_, _ = green.Print("  ✓ ")
 	fmt.Printf(format+"\n", args...)
 }
 
 func printWarn(format string, args ...interface{}) {
-	yellow.Print("  ⚠ ")
+	_, _ = yellow.Print("  ⚠ ")
 	fmt.Printf(format+"\n", args...)
 }
 
 func printFail(format string, args ...interface{}) {
-	red.Print("  ✗ ")
+	_, _ = red.Print("  ✗ ")
 	fmt.Printf(format+"\n", args...)
 }
 
 func printInfo(label, format string, args ...interface{}) {
-	dimmed.Print("  → ")
+	_, _ = dimmed.Print("  → ")
 	fmt.Printf("%s: ", label)
 	fmt.Printf(format+"\n", args...)
 }
