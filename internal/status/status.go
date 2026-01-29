@@ -113,7 +113,7 @@ func fetchBlockchainStatus(status *NodeStatus) {
 		var tmStatus TendermintStatus
 		if json.NewDecoder(resp.Body).Decode(&tmStatus) == nil {
 			var height int64
-			fmt.Sscanf(tmStatus.Result.SyncInfo.LatestBlockHeight, "%d", &height)
+			_, _ = fmt.Sscanf(tmStatus.Result.SyncInfo.LatestBlockHeight, "%d", &height)
 			status.Blockchain.BlockHeight = height
 			status.Blockchain.CatchingUp = tmStatus.Result.SyncInfo.CatchingUp
 			status.Blockchain.Synced = !tmStatus.Result.SyncInfo.CatchingUp
@@ -129,7 +129,7 @@ func fetchBlockchainStatus(status *NodeStatus) {
 		var netInfo TendermintNetInfo
 		if json.NewDecoder(resp.Body).Decode(&netInfo) == nil {
 			var peers int
-			fmt.Sscanf(netInfo.Result.NPeers, "%d", &peers)
+			_, _ = fmt.Sscanf(netInfo.Result.NPeers, "%d", &peers)
 			status.Blockchain.PeerCount = peers
 		}
 	}

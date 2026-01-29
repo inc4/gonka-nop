@@ -163,6 +163,6 @@ func (p *KeyManagement) runSecureWorkflow(ctx context.Context, state *config.Sta
 // generateMockPubKey generates a mock public key for demo
 func generateMockPubKey() string {
 	bytes := make([]byte, 32)
-	rand.Read(bytes)
+	_, _ = rand.Read(bytes)
 	return "gonkapub1" + hex.EncodeToString(bytes)[:40]
 }

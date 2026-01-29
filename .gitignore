@@ -10,6 +10,10 @@ gonka-node/
 .vscode/
 *.swp
 
+# Environment files
+.env
+.env.*
+
 # OS
 .DS_Store
 
