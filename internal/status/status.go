@@ -38,12 +38,12 @@ type BlockchainStatus struct {
 type MLNodeStatus struct {
 	Enabled     bool
 	ModelName   string
-	ModelLoaded  bool
-	GPUCount     int
-	GPUName      string
-	PoCStatus    string
-	LastPoCTime  time.Time
-	LastPoCOK    bool
+	ModelLoaded bool
+	GPUCount    int
+	GPUName     string
+	PoCStatus   string
+	LastPoCTime time.Time
+	LastPoCOK   bool
 }
 
 // TendermintStatus represents the response from /status endpoint
