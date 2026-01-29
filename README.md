@@ -1,5 +1,12 @@
 # Gonka NOP
 
+[![CI](https://github.com/inc4/gonka-nop/actions/workflows/ci.yml/badge.svg)](https://github.com/inc4/gonka-nop/actions/workflows/ci.yml)
+[![Security](https://github.com/inc4/gonka-nop/actions/workflows/security.yml/badge.svg)](https://github.com/inc4/gonka-nop/actions/workflows/security.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/inc4/gonka-nop)](https://goreportcard.com/report/github.com/inc4/gonka-nop)
+[![codecov](https://codecov.io/gh/inc4/gonka-nop/graph/badge.svg)](https://codecov.io/gh/inc4/gonka-nop)
+[![Go Reference](https://pkg.go.dev/badge/github.com/inc4/gonka-nop.svg)](https://pkg.go.dev/github.com/inc4/gonka-nop)
+[![License](https://img.shields.io/github/license/inc4/gonka-nop)](LICENSE)
+
 CLI tool that simplifies Gonka node deployment. One command to detect GPUs, configure runtime, and deploy.
 
 ## Install
