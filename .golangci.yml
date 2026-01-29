@@ -11,7 +11,11 @@ linters:
     - gosec
     - prealloc
 
-linters-settings:
+formatters:
+  enable:
+    - gofmt
+
+settings:
   gocyclo:
     min-complexity: 15
   goconst:
@@ -19,14 +23,14 @@ linters-settings:
     min-occurrences: 3
   misspell:
     locale: US
-  gosec:
-    excludes:
-      - G104 # Audit errors not checked (allow for deferred closes)
 
-issues:
-  exclude-rules:
+exclusions:
+  rules:
     # Exclude some linters from running on tests
     - path: _test\.go
       linters:
         - gosec
         - unparam
+  paths:
+    - third_party
+    - vendor
