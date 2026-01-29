@@ -10,27 +10,28 @@ linters:
     - unparam
     - gosec
     - prealloc
+  settings:
+    gocyclo:
+      min-complexity: 15
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+    misspell:
+      locale: US
+  exclusions:
+    generated: lax
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+          - unparam
+    paths:
+      - third_party
+      - vendor
 
 formatters:
   enable:
     - gofmt
 
-settings:
-  gocyclo:
-    min-complexity: 15
-  goconst:
-    min-len: 3
-    min-occurrences: 3
-  misspell:
-    locale: US
-
-exclusions:
-  rules:
-    # Exclude some linters from running on tests
-    - path: _test\.go
-      linters:
-        - gosec
-        - unparam
-  paths:
-    - third_party
-    - vendor
+run:
+  timeout: 5m
