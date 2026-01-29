@@ -34,7 +34,7 @@ func (p *Deploy) Run(ctx context.Context, state *config.State) error {
 		return err
 	}
 	if !confirm {
-		ui.Warn("Deployment cancelled by user")
+		ui.Warn("Deployment canceled by user")
 		return nil
 	}
 

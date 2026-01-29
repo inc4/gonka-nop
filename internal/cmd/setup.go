@@ -10,8 +10,8 @@ import (
 )
 
 var (
-	quick        bool
-	secure       bool
+	quick         bool
+	secure        bool
 	accountPubKey string
 )
 

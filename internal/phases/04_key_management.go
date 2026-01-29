@@ -57,7 +57,7 @@ func (p *KeyManagement) Run(ctx context.Context, state *config.State) error {
 	return p.runQuickWorkflow(ctx, state)
 }
 
-func (p *KeyManagement) runQuickWorkflow(ctx context.Context, state *config.State) error {
+func (p *KeyManagement) runQuickWorkflow(_ context.Context, state *config.State) error {
 	ui.Info("Running quick setup - all keys will be generated on this machine")
 	ui.Warn("For production, consider using secure setup with cold account key")
 
@@ -111,7 +111,7 @@ func (p *KeyManagement) runQuickWorkflow(ctx context.Context, state *config.Stat
 	return nil
 }
 
-func (p *KeyManagement) runSecureWorkflow(ctx context.Context, state *config.State) error {
+func (p *KeyManagement) runSecureWorkflow(_ context.Context, state *config.State) error {
 	ui.Info("Running secure setup - Account key should be on a separate machine")
 
 	// Check if account pubkey was provided

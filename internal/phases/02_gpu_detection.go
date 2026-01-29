@@ -88,9 +88,11 @@ func recommendConfig(gpuCount int, vramMB int) (tp, pp int, model string) {
 
 	switch {
 	case totalVRAM >= 320000: // 320GB+ (e.g., 4x H100 80GB)
+		// Large model needs full TP across all GPUs
 		return 8, 1, "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
-	case totalVRAM >= 160000: // 160GB+ (e.g., 8x RTX 4090)
-		return gpuCount, 1, "Qwen/QwQ-32B"
+	case totalVRAM >= 160000 && gpuCount >= 8: // 160GB+ with 8+ GPUs
+		// Use pipeline parallelism for better throughput
+		return gpuCount / 2, 2, "Qwen/QwQ-32B"
 	case totalVRAM >= 80000: // 80GB+ (e.g., 4x RTX 4090)
 		return gpuCount, 1, "Qwen/QwQ-32B"
 	case totalVRAM >= 40000: // 40GB+ (e.g., 2x RTX 4090)

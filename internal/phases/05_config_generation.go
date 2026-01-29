@@ -48,7 +48,7 @@ func (p *ConfigGeneration) Run(ctx context.Context, state *config.State) error {
 
 	// Create output directory
 	err = ui.WithSpinner("Creating output directory", func() error {
-		return os.MkdirAll(state.OutputDir, 0755)
+		return os.MkdirAll(state.OutputDir, 0750)
 	})
 	if err != nil {
 		return err
@@ -162,7 +162,7 @@ func generateNodeConfig(state *config.State) error {
 }
 `, state.SelectedModel, joinArgs(args))
 
-	return os.WriteFile(filepath.Join(state.OutputDir, "node-config.json"), []byte(content), 0644)
+	return os.WriteFile(filepath.Join(state.OutputDir, "node-config.json"), []byte(content), 0600)
 }
 
 func joinArgs(args []string) string {
@@ -243,7 +243,7 @@ services:
     env_file:
       - config.env
 `
-	return os.WriteFile(filepath.Join(state.OutputDir, "docker-compose.yml"), []byte(content), 0644)
+	return os.WriteFile(filepath.Join(state.OutputDir, "docker-compose.yml"), []byte(content), 0600)
 }
 
 func generateMLNodeCompose(state *config.State) error {
@@ -278,5 +278,5 @@ services:
       - config.env
 `, state.HFHome, state.HFHome)
 
-	return os.WriteFile(filepath.Join(state.OutputDir, "docker-compose.mlnode.yml"), []byte(content), 0644)
+	return os.WriteFile(filepath.Join(state.OutputDir, "docker-compose.mlnode.yml"), []byte(content), 0600)
 }

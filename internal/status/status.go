@@ -36,8 +36,8 @@ type BlockchainStatus struct {
 
 // MLNodeStatus holds ML node metrics
 type MLNodeStatus struct {
-	Enabled      bool
-	ModelName    string
+	Enabled     bool
+	ModelName   string
 	ModelLoaded  bool
 	GPUCount     int
 	GPUName      string

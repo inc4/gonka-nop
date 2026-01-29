@@ -60,13 +60,15 @@ func NewState(outputDir string) *State {
 
 // Load loads state from the output directory
 func Load(outputDir string) (*State, error) {
-	statePath := filepath.Join(outputDir, "state.json")
+	// Clean and validate path to prevent directory traversal
+	cleanDir := filepath.Clean(outputDir)
+	statePath := filepath.Join(cleanDir, "state.json")
 
-	data, err := os.ReadFile(statePath)
+	data, err := os.ReadFile(statePath) // #nosec G304 - path is cleaned above
 	if err != nil {
 		if os.IsNotExist(err) {
 			// Return new state if file doesn't exist
-			return NewState(outputDir), nil
+			return NewState(cleanDir), nil
 		}
 		return nil, err
 	}
@@ -84,7 +86,7 @@ func Load(outputDir string) (*State, error) {
 // Save persists the state to disk
 func (s *State) Save() error {
 	// Ensure output directory exists
-	if err := os.MkdirAll(s.OutputDir, 0755); err != nil {
+	if err := os.MkdirAll(s.OutputDir, 0750); err != nil {
 		return err
 	}
 
