@@ -109,7 +109,7 @@ func fetchBlockchainStatus(status *NodeStatus) {
 	// Fetch /status
 	resp, err := client.Get("http://localhost:26657/status")
 	if err == nil && resp.StatusCode == 200 {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		var tmStatus TendermintStatus
 		if json.NewDecoder(resp.Body).Decode(&tmStatus) == nil {
 			var height int64
@@ -123,11 +123,11 @@ func fetchBlockchainStatus(status *NodeStatus) {
 	}
 
 	// Fetch /net_info for peer count
-	resp, err = client.Get("http://localhost:26657/net_info")
-	if err == nil && resp.StatusCode == 200 {
-		defer resp.Body.Close()
+	resp2, err := client.Get("http://localhost:26657/net_info")
+	if err == nil && resp2.StatusCode == 200 {
+		defer func() { _ = resp2.Body.Close() }()
 		var netInfo TendermintNetInfo
-		if json.NewDecoder(resp.Body).Decode(&netInfo) == nil {
+		if json.NewDecoder(resp2.Body).Decode(&netInfo) == nil {
 			var peers int
 			_, _ = fmt.Sscanf(netInfo.Result.NPeers, "%d", &peers)
 			status.Blockchain.PeerCount = peers
@@ -141,7 +141,7 @@ func fetchMLNodeStatus(status *NodeStatus) {
 	// Fetch from Admin API
 	resp, err := client.Get("http://localhost:9200/admin/v1/nodes")
 	if err == nil && resp.StatusCode == 200 {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		var nodes []AdminMLNode
 		if json.NewDecoder(resp.Body).Decode(&nodes) == nil && len(nodes) > 0 {
 			node := nodes[0]
@@ -153,10 +153,10 @@ func fetchMLNodeStatus(status *NodeStatus) {
 	}
 
 	// Check vLLM health
-	resp, err = client.Get("http://localhost:8080/v1/models")
-	if err == nil && resp.StatusCode == 200 {
+	resp2, err := client.Get("http://localhost:8080/v1/models")
+	if err == nil && resp2.StatusCode == 200 {
 		status.MLNode.ModelLoaded = true
-		resp.Body.Close()
+		_ = resp2.Body.Close()
 	}
 }
 

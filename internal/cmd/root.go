@@ -56,7 +56,7 @@ func Execute() error {
 
 func printLogo() {
 	cyan := color.New(color.FgCyan, color.Bold)
-	cyan.Println(`
+	_, _ = cyan.Println(`
    ____             _           _   _  ___  ____
   / ___| ___  _ __ | | ____ _  | \ | |/ _ \|  _ \
  | |  _ / _ \| '_ \| |/ / _' | |  \| | | | | |_) |
@@ -167,8 +167,8 @@ func displayMockedGPUInfo() {
 	green := color.New(color.FgGreen)
 	dimmed := color.New(color.Faint)
 
-	cyan.Println("\nDetected GPUs")
-	dimmed.Println("─────────────────────────────────")
+	_, _ = cyan.Println("\nDetected GPUs")
+	_, _ = dimmed.Println("─────────────────────────────────")
 
 	// Mocked 4x RTX 4090
 	gpus := []struct {
@@ -189,10 +189,10 @@ func displayMockedGPUInfo() {
 	}
 
 	fmt.Println()
-	green.Printf("  Total: %d GPUs, %.1f GB VRAM\n", len(gpus), float64(totalVRAM)/1024)
+	_, _ = green.Printf("  Total: %d GPUs, %.1f GB VRAM\n", len(gpus), float64(totalVRAM)/1024)
 
-	cyan.Println("\nRecommended Configuration")
-	dimmed.Println("─────────────────────────────────")
+	_, _ = cyan.Println("\nRecommended Configuration")
+	_, _ = dimmed.Println("─────────────────────────────────")
 	fmt.Println("  Model:                 Qwen/QwQ-32B")
 	fmt.Println("  Tensor Parallel (TP):  4")
 	fmt.Println("  Pipeline Parallel (PP): 1")
@@ -203,11 +203,11 @@ func displayRealGPUInfo() {
 	cyan := color.New(color.FgCyan, color.Bold)
 	yellow := color.New(color.FgYellow)
 
-	cyan.Println("\nDetected GPUs")
+	_, _ = cyan.Println("\nDetected GPUs")
 	fmt.Println("─────────────────────────────────")
 
 	// Try nvidia-smi
-	yellow.Println("  ⚠ nvidia-smi not available or no GPUs detected")
+	_, _ = yellow.Println("  ⚠ nvidia-smi not available or no GPUs detected")
 	fmt.Println("  Run with --mocked to see demo output")
 }
 
