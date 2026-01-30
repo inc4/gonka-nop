@@ -23,6 +23,7 @@ func Display(s *NodeStatus) {
 	printOverview(s)
 	printBlockchain(s)
 	printMLNode(s)
+	printSecurity(s)
 }
 
 func printHeader(title string) {
@@ -61,7 +62,7 @@ func printOverview(s *NodeStatus) {
 
 	// Epoch participation
 	if s.Overview.EpochActive {
-		printOK("Epoch participation: Active (weight: %d)", s.Overview.EpochWeight)
+		printOK("Epoch %d: Active (weight: %d)", s.Overview.EpochNumber, s.Overview.EpochWeight)
 	} else {
 		printWarn("Epoch participation: Inactive")
 	}
@@ -70,8 +71,24 @@ func printOverview(s *NodeStatus) {
 func printBlockchain(s *NodeStatus) {
 	printSection("Blockchain")
 
-	// Block height
-	printInfo("Block height", "%s", formatNumber(s.Blockchain.BlockHeight))
+	// Block height with lag
+	if s.Blockchain.BlockLag > 0 && s.Blockchain.BlockLag <= 10 {
+		printOK("Block height: %s (lag: %d blocks)", formatNumber(s.Blockchain.BlockHeight), s.Blockchain.BlockLag)
+	} else if s.Blockchain.BlockLag > 10 {
+		printWarn("Block height: %s (lag: %d blocks — falling behind)", formatNumber(s.Blockchain.BlockHeight), s.Blockchain.BlockLag)
+	} else {
+		printInfo("Block height", "%s", formatNumber(s.Blockchain.BlockHeight))
+	}
+
+	// Last block time
+	if !s.Blockchain.LastBlockTime.IsZero() {
+		ago := formatDuration(time.Since(s.Blockchain.LastBlockTime))
+		if time.Since(s.Blockchain.LastBlockTime) < 30*time.Second {
+			printOK("Last block: %s ago", ago)
+		} else {
+			printWarn("Last block: %s ago (stale)", ago)
+		}
+	}
 
 	// Sync status
 	if s.Blockchain.Synced {
@@ -96,6 +113,18 @@ func printBlockchain(s *NodeStatus) {
 		printOK("Validator: Active")
 	} else {
 		printInfo("Validator", "Not in active set")
+	}
+
+	// Miss rate (critical for validators)
+	if s.Blockchain.TotalBlocks > 0 {
+		missPercent := s.Blockchain.MissRate * 100
+		if missPercent < 5 {
+			printOK("Miss rate: %.1f%% (%d/%d blocks missed)", missPercent, s.Blockchain.MissedBlocks, s.Blockchain.TotalBlocks)
+		} else if missPercent < 20 {
+			printWarn("Miss rate: %.1f%% (%d/%d blocks missed) — investigate", missPercent, s.Blockchain.MissedBlocks, s.Blockchain.TotalBlocks)
+		} else {
+			printFail("Miss rate: %.1f%% (%d/%d blocks missed) — CRITICAL: risk of jailing", missPercent, s.Blockchain.MissedBlocks, s.Blockchain.TotalBlocks)
+		}
 	}
 }
 
@@ -123,6 +152,12 @@ func printMLNode(s *NodeStatus) {
 		printInfo("GPUs", "%dx %s", s.MLNode.GPUCount, s.MLNode.GPUName)
 	}
 
+	// TP/PP configuration
+	if s.MLNode.TPSize > 0 {
+		printInfo("Config", "TP=%d PP=%d MemUtil=%.2f MaxLen=%d",
+			s.MLNode.TPSize, s.MLNode.PPSize, s.MLNode.MemoryUtil, s.MLNode.MaxModelLen)
+	}
+
 	// PoC Status
 	switch s.MLNode.PoCStatus {
 	case "Participating":
@@ -141,6 +176,34 @@ func printMLNode(s *NodeStatus) {
 		} else {
 			printFail("Last PoC: %s ago (failed)", ago)
 		}
+	}
+}
+
+func printSecurity(s *NodeStatus) {
+	printSection("Security")
+
+	if s.Security.FirewallConfigured {
+		printOK("Firewall: DOCKER-USER chain configured")
+	} else {
+		printWarn("Firewall: Not configured (internal ports may be exposed)")
+	}
+
+	if s.Security.DDoSProtection {
+		printOK("DDoS protection: Enabled (proxy route blocking)")
+	} else {
+		printWarn("DDoS protection: Not configured")
+	}
+
+	if s.Security.InternalPortsBound {
+		printOK("Internal ports: Bound to 127.0.0.1")
+	} else {
+		printWarn("Internal ports: Not restricted to localhost")
+	}
+
+	if s.Security.DriverConsistent {
+		printOK("NVIDIA driver: Versions consistent")
+	} else {
+		printFail("NVIDIA driver: Version MISMATCH (userspace vs kernel vs FM)")
 	}
 }
 

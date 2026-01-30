@@ -10,8 +10,6 @@ import (
 )
 
 var (
-	quick         bool
-	secure        bool
 	accountPubKey string
 )
 
@@ -29,32 +27,22 @@ This will guide you through:
 
 Examples:
   gonka-nop setup                    # Interactive setup
-  gonka-nop setup --quick            # Quick setup (all keys on server)
-  gonka-nop setup --secure           # Secure setup (account key separate)
-  gonka-nop setup -o /opt/gonka      # Custom output directory`,
+  gonka-nop setup -o /opt/gonka      # Custom output directory
+  gonka-nop setup --account-pubkey=<key>  # Provide account key`,
 	RunE: runSetup,
 }
 
 func init() {
-	setupCmd.Flags().BoolVar(&quick, "quick", false, "Quick setup: generate all keys on this machine")
-	setupCmd.Flags().BoolVar(&secure, "secure", false, "Secure setup: use account key from separate machine")
 	setupCmd.Flags().StringVar(&accountPubKey, "account-pubkey", "", "Account public key (for secure setup)")
 }
 
-func runSetup(cmd *cobra.Command, args []string) error {
+func runSetup(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
 
 	// Load or create state
 	state, err := config.Load(outputDir)
 	if err != nil {
 		return fmt.Errorf("failed to load state: %w", err)
-	}
-
-	// Set workflow from flags
-	if quick {
-		state.KeyWorkflow = "quick"
-	} else if secure {
-		state.KeyWorkflow = "secure"
 	}
 
 	// Set account pubkey if provided
