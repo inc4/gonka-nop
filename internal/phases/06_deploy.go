@@ -187,7 +187,7 @@ func (p *Deploy) startMLNode(state *config.State) error {
 	ui.Detail("ML node started: %s", gpuSummary)
 	ui.Detail("TP=%d, PP=%d, Memory Util=%.2f, Max Model Len=%d",
 		state.TPSize, state.PPSize, state.GPUMemoryUtil, state.MaxModelLen)
-	if state.KVCacheDtype != "" && state.KVCacheDtype != "auto" {
+	if state.KVCacheDtype != "" && state.KVCacheDtype != kvCacheDtypeAuto {
 		ui.Detail("KV Cache Dtype: %s (memory optimization)", state.KVCacheDtype)
 	}
 	ui.Detail("Attention Backend: %s", state.AttentionBackend)

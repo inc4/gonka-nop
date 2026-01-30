@@ -139,7 +139,7 @@ func recommendConfig(gpuCount int, vramMB int, _ string, hasNVLink bool) GPUReco
 		rec := GPURecommendation{
 			Model:        "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
 			MemoryUtil:   0.90,
-			KVCacheDtype: "auto",
+			KVCacheDtype: kvCacheDtypeAuto,
 		}
 		// 235B FP8 needs ~120GB for weights. Remaining VRAM for KV cache.
 		if gpuCount >= 8 && hasNVLink {
@@ -172,7 +172,7 @@ func recommendConfig(gpuCount int, vramMB int, _ string, hasNVLink bool) GPUReco
 			Model:        "Qwen/QwQ-32B",
 			MemoryUtil:   0.92,
 			MaxModelLen:  32768,
-			KVCacheDtype: "auto",
+			KVCacheDtype: kvCacheDtypeAuto,
 		}
 		// Tight VRAM: 4x 24GB = 96GB with 32B model = ~8GB per GPU for KV
 		if vramMB < 30000 {
@@ -188,7 +188,7 @@ func recommendConfig(gpuCount int, vramMB int, _ string, hasNVLink bool) GPUReco
 			Model:        "Qwen/Qwen3-32B-FP8",
 			MemoryUtil:   0.92,
 			MaxModelLen:  24576,
-			KVCacheDtype: "auto",
+			KVCacheDtype: kvCacheDtypeAuto,
 		}
 
 	default: // < 40GB — below minimum
@@ -198,7 +198,7 @@ func recommendConfig(gpuCount int, vramMB int, _ string, hasNVLink bool) GPUReco
 			Model:        "Qwen/Qwen3-32B-FP8",
 			MemoryUtil:   0.94,
 			MaxModelLen:  8192,
-			KVCacheDtype: "auto",
+			KVCacheDtype: kvCacheDtypeAuto,
 		}
 	}
 }

@@ -16,6 +16,7 @@ const (
 	defaultModel            = "Qwen/QwQ-32B"
 	defaultAttentionBackend = "FLASH_ATTN"
 	defaultMLNodeImageTag   = "3.0.12"
+	kvCacheDtypeAuto        = "auto"
 )
 
 // ConfigGeneration generates configuration files
@@ -255,7 +256,7 @@ func buildVLLMArgs(state *config.State) []string {
 	}
 
 	// KV cache dtype (fp8 for tight VRAM)
-	if state.KVCacheDtype != "" && state.KVCacheDtype != "auto" {
+	if state.KVCacheDtype != "" && state.KVCacheDtype != kvCacheDtypeAuto {
 		args = append(args, "--kv-cache-dtype", state.KVCacheDtype)
 	}
 

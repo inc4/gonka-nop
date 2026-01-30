@@ -30,7 +30,7 @@ func TestRecommendConfig(t *testing.T) {
 			wantPP:         1,
 			wantModel:      "Qwen/Qwen3-32B-FP8",
 			wantMemUtil:    0.94,
-			wantKVCache:    "auto",
+			wantKVCache:    kvCacheDtypeAuto,
 			wantMaxModelLe: 8192,
 		},
 		{
@@ -43,7 +43,7 @@ func TestRecommendConfig(t *testing.T) {
 			wantPP:         1,
 			wantModel:      "Qwen/Qwen3-32B-FP8",
 			wantMemUtil:    0.92,
-			wantKVCache:    "auto",
+			wantKVCache:    kvCacheDtypeAuto,
 			wantMaxModelLe: 24576,
 		},
 		{
@@ -56,7 +56,7 @@ func TestRecommendConfig(t *testing.T) {
 			wantPP:         1,
 			wantModel:      "Qwen/QwQ-32B",
 			wantMemUtil:    0.90,
-			wantKVCache:    "auto",
+			wantKVCache:    kvCacheDtypeAuto,
 			wantMaxModelLe: 24576,
 		},
 		{
@@ -69,7 +69,7 @@ func TestRecommendConfig(t *testing.T) {
 			wantPP:         1,
 			wantModel:      "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
 			wantMemUtil:    0.88,
-			wantKVCache:    "auto",
+			wantKVCache:    kvCacheDtypeAuto,
 			wantMaxModelLe: 16384,
 		},
 		{
@@ -82,7 +82,7 @@ func TestRecommendConfig(t *testing.T) {
 			wantPP:         1,
 			wantModel:      "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
 			wantMemUtil:    0.90,
-			wantKVCache:    "auto",
+			wantKVCache:    kvCacheDtypeAuto,
 			wantMaxModelLe: 240000,
 		},
 		{
@@ -95,7 +95,7 @@ func TestRecommendConfig(t *testing.T) {
 			wantPP:         2,
 			wantModel:      "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
 			wantMemUtil:    0.90,
-			wantKVCache:    "auto",
+			wantKVCache:    kvCacheDtypeAuto,
 			wantMaxModelLe: 131072,
 		},
 		{

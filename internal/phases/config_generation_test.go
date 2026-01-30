@@ -10,6 +10,12 @@ import (
 	"github.com/inc4/gonka-nop/internal/config"
 )
 
+const (
+	testKVCacheFP8           = "fp8"
+	testIP                   = "10.0.0.1"
+	testMLNodeImageBlackwell = "3.0.12-blackwell"
+)
+
 func TestBuildVLLMArgs(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -59,7 +65,7 @@ func TestBuildVLLMArgs(t *testing.T) {
 				s.TPSize = 8
 				s.GPUMemoryUtil = 0.90
 				s.MaxModelLen = 240000
-				s.KVCacheDtype = "fp8"
+				s.KVCacheDtype = testKVCacheFP8
 				return s
 			}(),
 			wantArgs: []string{
@@ -78,7 +84,7 @@ func TestBuildVLLMArgs(t *testing.T) {
 				s.PPSize = 2
 				s.GPUMemoryUtil = 0.90
 				s.MaxModelLen = 131072
-				s.KVCacheDtype = "fp8"
+				s.KVCacheDtype = testKVCacheFP8
 				return s
 			}(),
 			wantArgs: []string{
@@ -95,7 +101,7 @@ func TestBuildVLLMArgs(t *testing.T) {
 			state: func() *config.State {
 				s := config.NewState("/tmp/test")
 				s.GPUMemoryUtil = 0.92
-				s.KVCacheDtype = "auto"
+				s.KVCacheDtype = kvCacheDtypeAuto
 				return s
 			}(),
 			wantArgs: []string{
@@ -198,11 +204,11 @@ func TestGenerateConfigEnv(t *testing.T) {
 	state := config.NewState(tmpDir)
 	state.KeyName = "test-key"
 	state.AccountPubKey = "gonka1abc123"
-	state.PublicIP = "10.0.0.1"
+	state.PublicIP = testIP
 	state.P2PPort = 5000
 	state.APIPort = 8000
 	state.HFHome = "/mnt/hf"
-	state.SelectedModel = "Qwen/QwQ-32B"
+	state.SelectedModel = defaultModel
 	state.AttentionBackend = "FLASH_ATTN"
 
 	if err := generateConfigEnv(state); err != nil {
@@ -221,10 +227,10 @@ func TestGenerateConfigEnv(t *testing.T) {
 	}{
 		{"KEY_NAME", "KEY_NAME=test-key"},
 		{"ACCOUNT_PUBKEY", "ACCOUNT_PUBKEY=gonka1abc123"},
-		{"PUBLIC_URL", "PUBLIC_URL=http://10.0.0.1:8000"},
-		{"P2P_EXTERNAL_ADDRESS", "P2P_EXTERNAL_ADDRESS=tcp://10.0.0.1:5000"},
+		{"PUBLIC_URL", "PUBLIC_URL=http://" + testIP + ":8000"},
+		{"P2P_EXTERNAL_ADDRESS", "P2P_EXTERNAL_ADDRESS=tcp://" + testIP + ":5000"},
 		{"HF_HOME", "HF_HOME=/mnt/hf"},
-		{"MODEL_NAME", "MODEL_NAME=Qwen/QwQ-32B"},
+		{"MODEL_NAME", "MODEL_NAME=" + defaultModel},
 		{"VLLM_ATTENTION_BACKEND", "VLLM_ATTENTION_BACKEND=FLASH_ATTN"},
 		{"DDoS blocked routes", "GONKA_API_BLOCKED_ROUTES"},
 		{"DISABLE_CHAIN_API", "DISABLE_CHAIN_API=true"},
@@ -275,8 +281,8 @@ func TestGenerateNodeConfig(t *testing.T) {
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	state := config.NewState(tmpDir)
-	state.PublicIP = "10.0.0.1"
-	state.SelectedModel = "Qwen/QwQ-32B"
+	state.PublicIP = testIP
+	state.SelectedModel = defaultModel
 	state.TPSize = 4
 	state.GPUMemoryUtil = 0.92
 	state.MaxModelLen = 32768
@@ -301,12 +307,12 @@ func TestGenerateNodeConfig(t *testing.T) {
 	if strings.Contains(content, `"host": "http://`) {
 		t.Error("node-config.json host has http:// prefix")
 	}
-	if !strings.Contains(content, `"host": "10.0.0.1"`) {
+	if !strings.Contains(content, `"host": "`+testIP+`"`) {
 		t.Error("node-config.json missing host field")
 	}
 
 	// Model name should be present
-	if !strings.Contains(content, "Qwen/QwQ-32B") {
+	if !strings.Contains(content, defaultModel) {
 		t.Error("node-config.json missing model name")
 	}
 
@@ -325,7 +331,7 @@ func TestGenerateNodeConfig_StripHTTPPrefix(t *testing.T) {
 
 	state := config.NewState(tmpDir)
 	state.PublicIP = "http://1.2.3.4"
-	state.SelectedModel = "Qwen/QwQ-32B"
+	state.SelectedModel = defaultModel
 
 	if err := generateNodeConfig(state); err != nil {
 		t.Fatalf("generateNodeConfig() error: %v", err)
@@ -354,7 +360,7 @@ func TestGenerateNodeConfig_StripHTTPSPrefix(t *testing.T) {
 
 	state := config.NewState(tmpDir)
 	state.PublicIP = "https://1.2.3.4"
-	state.SelectedModel = "Qwen/QwQ-32B"
+	state.SelectedModel = defaultModel
 
 	if err := generateNodeConfig(state); err != nil {
 		t.Fatalf("generateNodeConfig() error: %v", err)
@@ -379,7 +385,7 @@ func TestGenerateNodeConfig_DefaultModel(t *testing.T) {
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	state := config.NewState(tmpDir)
-	state.PublicIP = "10.0.0.1"
+	state.PublicIP = testIP
 	// SelectedModel left empty
 
 	if err := generateNodeConfig(state); err != nil {
@@ -458,7 +464,7 @@ func TestGenerateMLNodeCompose(t *testing.T) {
 
 	state := config.NewState(tmpDir)
 	state.SelectedModel = "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
-	state.MLNodeImageTag = "3.0.12-blackwell"
+	state.MLNodeImageTag = testMLNodeImageBlackwell
 	state.AttentionBackend = "FLASHINFER"
 	state.HFHome = "/mnt/shared/huggingface"
 
@@ -476,7 +482,7 @@ func TestGenerateMLNodeCompose(t *testing.T) {
 		label    string
 		contains string
 	}{
-		{"MLNode image tag", "mlnode:3.0.12-blackwell"},
+		{"MLNode image tag", "mlnode:" + testMLNodeImageBlackwell},
 		{"Attention backend", "VLLM_ATTENTION_BACKEND=FLASHINFER"},
 		{"HF_HOME env", "HF_HOME=/mnt/shared/huggingface"},
 		{"HF_HOME volume", "/mnt/shared/huggingface:/mnt/shared/huggingface"},
