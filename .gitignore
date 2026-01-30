@@ -14,6 +14,9 @@ gonka-node/
 .env
 .env.*
 
+# Claude Code
+CLAUDE.md
+
 # OS
 .DS_Store
 
