@@ -75,6 +75,11 @@ Templates in `templates/` directory, use Go text/template:
 - `config.env.tmpl`
 - `node-config.json.tmpl`
 
+## Git Commits
+
+- **Never add `Co-Authored-By` lines** to commit messages
+- Follow conventional commit style from the repo history
+
 ## Reference Patterns
 
 - CLI wizard flow: @../airdao-nop/src/start.ts
