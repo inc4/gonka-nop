@@ -12,6 +12,7 @@ type NodeStatus struct {
 	Overview   OverviewStatus
 	Blockchain BlockchainStatus
 	MLNode     MLNodeStatus
+	Security   SecurityStatus
 }
 
 // OverviewStatus holds general node status
@@ -21,17 +22,24 @@ type OverviewStatus struct {
 	NodeRegistered    bool
 	NodeAddress       string
 	EpochActive       bool
+	EpochNumber       int
 	EpochWeight       int
 }
 
 // BlockchainStatus holds blockchain-related metrics
 type BlockchainStatus struct {
 	BlockHeight   int64
+	NetworkHeight int64 // highest known block on network
+	BlockLag      int64 // NetworkHeight - BlockHeight
 	Synced        bool
 	CatchingUp    bool
 	PeerCount     int
 	ValidatorAddr string
 	IsValidator   bool
+	MissRate      float64 // percentage of missed blocks in current epoch
+	MissedBlocks  int
+	TotalBlocks   int
+	LastBlockTime time.Time
 }
 
 // MLNodeStatus holds ML node metrics
@@ -41,9 +49,21 @@ type MLNodeStatus struct {
 	ModelLoaded bool
 	GPUCount    int
 	GPUName     string
+	TPSize      int
+	PPSize      int
+	MemoryUtil  float64
+	MaxModelLen int
 	PoCStatus   string
 	LastPoCTime time.Time
 	LastPoCOK   bool
+}
+
+// SecurityStatus holds security configuration status
+type SecurityStatus struct {
+	FirewallConfigured bool
+	DDoSProtection     bool
+	InternalPortsBound bool // ports bound to 127.0.0.1
+	DriverConsistent   bool
 }
 
 // TendermintStatus represents the response from /status endpoint
@@ -172,35 +192,42 @@ func fetchOverviewStatus(status *NodeStatus) {
 
 	// If MLNode is accessible
 	if status.MLNode.ModelLoaded {
-		containersRunning += 1
+		containersRunning++
 	}
 
 	status.Overview.ContainersRunning = containersRunning
-	status.Overview.ContainersTotal = 7 // Expected total
+	status.Overview.ContainersTotal = 8 // Expected total (tmkms, node, api, bridge, proxy, explorer, mlnode, proxy-ssl optional)
 
 	// Node is registered if it has a validator address
 	status.Overview.NodeRegistered = status.Blockchain.ValidatorAddr != ""
 	status.Overview.NodeAddress = status.Blockchain.ValidatorAddr
 }
 
-// FetchMockedStatus returns mocked status for demo
+// FetchMockedStatus returns mocked status for demo with full validator details
 func FetchMockedStatus() *NodeStatus {
 	return &NodeStatus{
 		Overview: OverviewStatus{
-			ContainersRunning: 7,
-			ContainersTotal:   7,
+			ContainersRunning: 8,
+			ContainersTotal:   8,
 			NodeRegistered:    true,
 			NodeAddress:       "gonka1x8q2k9f5p7w3m6n4v2c8b1a0z9y8x7w6v5u4t3",
 			EpochActive:       true,
+			EpochNumber:       427,
 			EpochWeight:       1000,
 		},
 		Blockchain: BlockchainStatus{
-			BlockHeight:   1234567,
+			BlockHeight:   1250000,
+			NetworkHeight: 1250003,
+			BlockLag:      3,
 			Synced:        true,
 			CatchingUp:    false,
 			PeerCount:     12,
 			ValidatorAddr: "ABCD1234EFGH5678",
 			IsValidator:   true,
+			MissRate:      0.02,
+			MissedBlocks:  3,
+			TotalBlocks:   150,
+			LastBlockTime: time.Now().Add(-6 * time.Second),
 		},
 		MLNode: MLNodeStatus{
 			Enabled:     true,
@@ -208,9 +235,19 @@ func FetchMockedStatus() *NodeStatus {
 			ModelLoaded: true,
 			GPUCount:    4,
 			GPUName:     "NVIDIA GeForce RTX 4090",
+			TPSize:      4,
+			PPSize:      1,
+			MemoryUtil:  0.92,
+			MaxModelLen: 32768,
 			PoCStatus:   "Participating",
-			LastPoCTime: time.Now().Add(-2 * time.Hour),
+			LastPoCTime: time.Now().Add(-2 * time.Minute),
 			LastPoCOK:   true,
+		},
+		Security: SecurityStatus{
+			FirewallConfigured: true,
+			DDoSProtection:     true,
+			InternalPortsBound: true,
+			DriverConsistent:   true,
 		},
 	}
 }
