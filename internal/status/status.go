@@ -106,15 +106,40 @@ type AdminMLNode struct {
 	Enabled       bool     `json:"enabled"`
 }
 
+// StatusConfig holds the URLs for status endpoints.
+// When nil is passed, defaults are used.
+type StatusConfig struct {
+	TendermintURL string // default "http://localhost:26657"
+	AdminURL      string // default "http://localhost:9200"
+	VLLMHealthURL string // default "http://localhost:8080"
+}
+
+func defaultConfig() *StatusConfig {
+	return &StatusConfig{
+		TendermintURL: "http://localhost:26657",
+		AdminURL:      "http://localhost:9200",
+		VLLMHealthURL: "http://localhost:8080",
+	}
+}
+
 // FetchStatus fetches status from all endpoints
 func FetchStatus(outputDir string) (*NodeStatus, error) {
+	return FetchStatusWithConfig(outputDir, nil)
+}
+
+// FetchStatusWithConfig fetches status using the given config.
+// If cfg is nil, default localhost URLs are used.
+func FetchStatusWithConfig(_ string, cfg *StatusConfig) (*NodeStatus, error) {
+	if cfg == nil {
+		cfg = defaultConfig()
+	}
 	status := &NodeStatus{}
 
 	// Fetch blockchain status
-	fetchBlockchainStatus(status)
+	fetchBlockchainStatus(status, cfg)
 
 	// Fetch MLNode status
-	fetchMLNodeStatus(status)
+	fetchMLNodeStatus(status, cfg)
 
 	// Fetch overview (container status, registration)
 	fetchOverviewStatus(status)
@@ -122,12 +147,12 @@ func FetchStatus(outputDir string) (*NodeStatus, error) {
 	return status, nil
 }
 
-func fetchBlockchainStatus(status *NodeStatus) {
+func fetchBlockchainStatus(status *NodeStatus, cfg *StatusConfig) {
 	// Try to fetch from Tendermint RPC
 	client := &http.Client{Timeout: 5 * time.Second}
 
 	// Fetch /status
-	resp, err := client.Get("http://localhost:26657/status")
+	resp, err := client.Get(cfg.TendermintURL + "/status")
 	if err == nil && resp.StatusCode == 200 {
 		defer func() { _ = resp.Body.Close() }()
 		var tmStatus TendermintStatus
@@ -143,7 +168,7 @@ func fetchBlockchainStatus(status *NodeStatus) {
 	}
 
 	// Fetch /net_info for peer count
-	resp2, err := client.Get("http://localhost:26657/net_info")
+	resp2, err := client.Get(cfg.TendermintURL + "/net_info")
 	if err == nil && resp2.StatusCode == 200 {
 		defer func() { _ = resp2.Body.Close() }()
 		var netInfo TendermintNetInfo
@@ -155,11 +180,11 @@ func fetchBlockchainStatus(status *NodeStatus) {
 	}
 }
 
-func fetchMLNodeStatus(status *NodeStatus) {
+func fetchMLNodeStatus(status *NodeStatus, cfg *StatusConfig) {
 	client := &http.Client{Timeout: 5 * time.Second}
 
 	// Fetch from Admin API
-	resp, err := client.Get("http://localhost:9200/admin/v1/nodes")
+	resp, err := client.Get(cfg.AdminURL + "/admin/v1/nodes")
 	if err == nil && resp.StatusCode == 200 {
 		defer func() { _ = resp.Body.Close() }()
 		var nodes []AdminMLNode
@@ -173,7 +198,7 @@ func fetchMLNodeStatus(status *NodeStatus) {
 	}
 
 	// Check vLLM health
-	resp2, err := client.Get("http://localhost:8080/v1/models")
+	resp2, err := client.Get(cfg.VLLMHealthURL + "/v1/models")
 	if err == nil && resp2.StatusCode == 200 {
 		status.MLNode.ModelLoaded = true
 		_ = resp2.Body.Close()
