@@ -10,6 +10,11 @@ import (
 	"github.com/inc4/gonka-nop/internal/ui"
 )
 
+const (
+	kvCacheDtypeFP8    = "fp8"
+	mlnodeBlackwellTag = "3.0.12-blackwell"
+)
+
 // GPUDetection detects available GPUs and recommends configuration
 type GPUDetection struct{}
 
@@ -101,7 +106,7 @@ func (p *GPUDetection) Run(_ context.Context, state *config.State) error {
 	ui.Detail("Pipeline Parallel Size (PP): %d", rec.PP)
 	ui.Detail("GPU Memory Utilization: %.2f", rec.MemoryUtil)
 	ui.Detail("Max Model Length: %d", rec.MaxModelLen)
-	if rec.KVCacheDtype == "fp8" {
+	if rec.KVCacheDtype == kvCacheDtypeFP8 {
 		ui.Detail("KV Cache Dtype: fp8 (tight VRAM — saves memory)")
 	}
 	ui.Detail("MLNode Image: ghcr.io/product-science/mlnode:%s", state.MLNodeImageTag)
@@ -160,7 +165,7 @@ func recommendConfig(gpuCount int, vramMB int, _ string, hasNVLink bool) GPUReco
 		}
 		// 8x A100 40GB = 320GB, needs fp8 KV cache to avoid OOM
 		if vramMB <= 41000 {
-			rec.KVCacheDtype = "fp8"
+			rec.KVCacheDtype = kvCacheDtypeFP8
 			rec.MemoryUtil = 0.90
 		}
 		return rec
@@ -169,7 +174,7 @@ func recommendConfig(gpuCount int, vramMB int, _ string, hasNVLink bool) GPUReco
 		rec := GPURecommendation{
 			TP:           gpuCount,
 			PP:           1,
-			Model:        "Qwen/QwQ-32B",
+			Model:        defaultModel,
 			MemoryUtil:   0.92,
 			MaxModelLen:  32768,
 			KVCacheDtype: kvCacheDtypeAuto,
@@ -222,9 +227,9 @@ func selectMLNodeImage(arch string) string {
 	case "sm_90", "sm_90a": // H100, H200
 		return "3.0.12"
 	case "sm_100": // B200, B300
-		return "3.0.12-blackwell"
+		return mlnodeBlackwellTag
 	case "sm_120": // RTX 5090
-		return "3.0.12-blackwell" // sm120 build when available
+		return mlnodeBlackwellTag // sm120 build when available
 	default:
 		return "3.0.12"
 	}

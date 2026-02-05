@@ -54,7 +54,7 @@ func TestRecommendConfig(t *testing.T) {
 			hasNVLink:      false,
 			wantTP:         4,
 			wantPP:         1,
-			wantModel:      "Qwen/QwQ-32B",
+			wantModel:      defaultModel,
 			wantMemUtil:    0.90,
 			wantKVCache:    kvCacheDtypeAuto,
 			wantMaxModelLe: 24576,
@@ -108,7 +108,7 @@ func TestRecommendConfig(t *testing.T) {
 			wantPP:         1,
 			wantModel:      "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
 			wantMemUtil:    0.90,
-			wantKVCache:    "fp8",
+			wantKVCache:    kvCacheDtypeFP8,
 			wantMaxModelLe: 240000,
 		},
 	}
@@ -212,8 +212,8 @@ func TestSelectMLNodeImage(t *testing.T) {
 		{"sm_89", "3.0.12"},
 		{"sm_90", "3.0.12"},
 		{"sm_90a", "3.0.12"},
-		{"sm_100", "3.0.12-blackwell"},
-		{"sm_120", "3.0.12-blackwell"},
+		{"sm_100", mlnodeBlackwellTag},
+		{"sm_120", mlnodeBlackwellTag},
 	}
 
 	for _, tt := range tests {

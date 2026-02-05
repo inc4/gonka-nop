@@ -231,7 +231,7 @@ func generateNodeConfig(state *config.State) error {
 
 // buildVLLMArgs builds the vLLM command-line arguments from state
 func buildVLLMArgs(state *config.State) []string {
-	args := []string{"--quantization", "fp8"}
+	args := []string{"--quantization", kvCacheDtypeFP8}
 
 	// GPU memory utilization (0.88-0.94, not 0.9/0.99)
 	memUtil := state.GPUMemoryUtil

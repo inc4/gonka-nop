@@ -10,11 +10,7 @@ import (
 	"github.com/inc4/gonka-nop/internal/config"
 )
 
-const (
-	testKVCacheFP8           = "fp8"
-	testIP                   = "10.0.0.1"
-	testMLNodeImageBlackwell = "3.0.12-blackwell"
-)
+const testIP = "10.0.0.1"
 
 func TestBuildVLLMArgs(t *testing.T) {
 	tests := []struct {
@@ -26,7 +22,7 @@ func TestBuildVLLMArgs(t *testing.T) {
 			name:  "Default state (zero memory util defaults to 0.90)",
 			state: config.NewState("/tmp/test"),
 			wantArgs: []string{
-				"--quantization", "fp8",
+				"--quantization", kvCacheDtypeFP8,
 				"--gpu-memory-utilization", "0.90",
 			},
 		},
@@ -39,7 +35,7 @@ func TestBuildVLLMArgs(t *testing.T) {
 				return s
 			}(),
 			wantArgs: []string{
-				"--quantization", "fp8",
+				"--quantization", kvCacheDtypeFP8,
 				"--gpu-memory-utilization", "0.92",
 				"--tensor-parallel-size", "4",
 			},
@@ -53,7 +49,7 @@ func TestBuildVLLMArgs(t *testing.T) {
 				return s
 			}(),
 			wantArgs: []string{
-				"--quantization", "fp8",
+				"--quantization", kvCacheDtypeFP8,
 				"--gpu-memory-utilization", "0.88",
 				"--pipeline-parallel-size", "2",
 			},
@@ -65,15 +61,15 @@ func TestBuildVLLMArgs(t *testing.T) {
 				s.TPSize = 8
 				s.GPUMemoryUtil = 0.90
 				s.MaxModelLen = 240000
-				s.KVCacheDtype = testKVCacheFP8
+				s.KVCacheDtype = kvCacheDtypeFP8
 				return s
 			}(),
 			wantArgs: []string{
-				"--quantization", "fp8",
+				"--quantization", kvCacheDtypeFP8,
 				"--gpu-memory-utilization", "0.90",
 				"--tensor-parallel-size", "8",
 				"--max-model-len", "240000",
-				"--kv-cache-dtype", "fp8",
+				"--kv-cache-dtype", kvCacheDtypeFP8,
 			},
 		},
 		{
@@ -84,16 +80,16 @@ func TestBuildVLLMArgs(t *testing.T) {
 				s.PPSize = 2
 				s.GPUMemoryUtil = 0.90
 				s.MaxModelLen = 131072
-				s.KVCacheDtype = testKVCacheFP8
+				s.KVCacheDtype = kvCacheDtypeFP8
 				return s
 			}(),
 			wantArgs: []string{
-				"--quantization", "fp8",
+				"--quantization", kvCacheDtypeFP8,
 				"--gpu-memory-utilization", "0.90",
 				"--tensor-parallel-size", "4",
 				"--pipeline-parallel-size", "2",
 				"--max-model-len", "131072",
-				"--kv-cache-dtype", "fp8",
+				"--kv-cache-dtype", kvCacheDtypeFP8,
 			},
 		},
 		{
@@ -105,7 +101,7 @@ func TestBuildVLLMArgs(t *testing.T) {
 				return s
 			}(),
 			wantArgs: []string{
-				"--quantization", "fp8",
+				"--quantization", kvCacheDtypeFP8,
 				"--gpu-memory-utilization", "0.92",
 			},
 		},
@@ -162,7 +158,7 @@ func TestFormatJSONArgs(t *testing.T) {
 		},
 		{
 			name: "Multiple args",
-			args: []string{"--quantization", "fp8", "--tensor-parallel-size", "4"},
+			args: []string{"--quantization", kvCacheDtypeFP8, "--tensor-parallel-size", "4"},
 			want: `"--quantization", "fp8", "--tensor-parallel-size", "4"`,
 		},
 	}
@@ -464,7 +460,7 @@ func TestGenerateMLNodeCompose(t *testing.T) {
 
 	state := config.NewState(tmpDir)
 	state.SelectedModel = "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
-	state.MLNodeImageTag = testMLNodeImageBlackwell
+	state.MLNodeImageTag = mlnodeBlackwellTag
 	state.AttentionBackend = "FLASHINFER"
 	state.HFHome = "/mnt/shared/huggingface"
 
@@ -482,7 +478,7 @@ func TestGenerateMLNodeCompose(t *testing.T) {
 		label    string
 		contains string
 	}{
-		{"MLNode image tag", "mlnode:" + testMLNodeImageBlackwell},
+		{"MLNode image tag", "mlnode:" + mlnodeBlackwellTag},
 		{"Attention backend", "VLLM_ATTENTION_BACKEND=FLASHINFER"},
 		{"HF_HOME env", "HF_HOME=/mnt/shared/huggingface"},
 		{"HF_HOME volume", "/mnt/shared/huggingface:/mnt/shared/huggingface"},
