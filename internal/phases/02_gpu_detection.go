@@ -3,10 +3,16 @@ package phases
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/inc4/gonka-nop/internal/config"
 	"github.com/inc4/gonka-nop/internal/ui"
+)
+
+const (
+	kvCacheDtypeFP8    = "fp8"
+	mlnodeBlackwellTag = "3.0.12-blackwell"
 )
 
 // GPUDetection detects available GPUs and recommends configuration
@@ -21,24 +27,24 @@ func (p *GPUDetection) Name() string {
 }
 
 func (p *GPUDetection) Description() string {
-	return "Detecting NVIDIA GPUs and calculating optimal configuration"
+	return "Detecting NVIDIA GPUs, topology, and calculating optimal configuration"
 }
 
 func (p *GPUDetection) ShouldRun(state *config.State) bool {
 	return !state.IsPhaseComplete(p.Name())
 }
 
-func (p *GPUDetection) Run(ctx context.Context, state *config.State) error {
+func (p *GPUDetection) Run(_ context.Context, state *config.State) error {
 	// Detect GPUs (mocked)
 	var gpus []config.GPUInfo
 	err := ui.WithSpinner("Detecting NVIDIA GPUs", func() error {
 		time.Sleep(800 * time.Millisecond)
 		// Mocked GPU data - simulating 4x RTX 4090
 		gpus = []config.GPUInfo{
-			{Index: 0, Name: "NVIDIA GeForce RTX 4090", MemoryMB: 24564},
-			{Index: 1, Name: "NVIDIA GeForce RTX 4090", MemoryMB: 24564},
-			{Index: 2, Name: "NVIDIA GeForce RTX 4090", MemoryMB: 24564},
-			{Index: 3, Name: "NVIDIA GeForce RTX 4090", MemoryMB: 24564},
+			{Index: 0, Name: "NVIDIA GeForce RTX 4090", MemoryMB: 24564, DriverVersion: "570.133.20", Architecture: "sm_89", PCIBusID: "0000:01:00.0"},
+			{Index: 1, Name: "NVIDIA GeForce RTX 4090", MemoryMB: 24564, DriverVersion: "570.133.20", Architecture: "sm_89", PCIBusID: "0000:02:00.0"},
+			{Index: 2, Name: "NVIDIA GeForce RTX 4090", MemoryMB: 24564, DriverVersion: "570.133.20", Architecture: "sm_89", PCIBusID: "0000:03:00.0"},
+			{Index: 3, Name: "NVIDIA GeForce RTX 4090", MemoryMB: 24564, DriverVersion: "570.133.20", Architecture: "sm_89", PCIBusID: "0000:04:00.0"},
 		}
 		return nil
 	})
@@ -46,20 +52,37 @@ func (p *GPUDetection) Run(ctx context.Context, state *config.State) error {
 		return err
 	}
 
-	// Store in state
 	state.GPUs = gpus
 
 	// Display detected GPUs
 	ui.Header("Detected GPUs")
 	totalVRAM := 0
 	for _, gpu := range gpus {
-		ui.Detail("[%d] %s - %d MB VRAM", gpu.Index, gpu.Name, gpu.MemoryMB)
+		ui.Detail("[%d] %s - %d MB VRAM (driver: %s, arch: %s)", gpu.Index, gpu.Name, gpu.MemoryMB, gpu.DriverVersion, gpu.Architecture)
 		totalVRAM += gpu.MemoryMB
 	}
 	ui.Info("Total: %d GPUs, %.1f GB VRAM", len(gpus), float64(totalVRAM)/1024)
 
+	// Detect GPU topology (mocked)
+	err = ui.WithSpinner("Detecting GPU topology", func() error {
+		time.Sleep(400 * time.Millisecond)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	topology := detectTopology(gpus)
+	state.GPUTopology = topology
+
+	if topology.HasNVLink {
+		ui.Success("NVLink detected - optimal for multi-GPU inference")
+	} else {
+		ui.Warn("PCIe %s only - no NVLink. Multi-GPU performance may be reduced", topology.PCIeVersion)
+	}
+
 	// Calculate recommended configuration
-	err = ui.WithSpinner("Calculating optimal TP/PP configuration", func() error {
+	err = ui.WithSpinner("Calculating optimal configuration", func() error {
 		time.Sleep(500 * time.Millisecond)
 		return nil
 	})
@@ -67,38 +90,158 @@ func (p *GPUDetection) Run(ctx context.Context, state *config.State) error {
 		return err
 	}
 
-	// Recommend model and TP/PP based on GPU count
-	tp, pp, model := recommendConfig(len(gpus), gpus[0].MemoryMB)
-	state.TPSize = tp
-	state.PPSize = pp
-	state.SelectedModel = model
+	rec := recommendConfig(len(gpus), gpus[0].MemoryMB, gpus[0].Architecture, topology.HasNVLink)
+	state.TPSize = rec.TP
+	state.PPSize = rec.PP
+	state.SelectedModel = rec.Model
+	state.GPUMemoryUtil = rec.MemoryUtil
+	state.MaxModelLen = rec.MaxModelLen
+	state.KVCacheDtype = rec.KVCacheDtype
+	state.MLNodeImageTag = selectMLNodeImage(gpus[0].Architecture)
+	state.AttentionBackend = selectAttentionBackend(gpus[0].Architecture)
 
 	ui.Header("Recommended Configuration")
-	ui.Detail("Model: %s", model)
-	ui.Detail("Tensor Parallel Size (TP): %d", tp)
-	ui.Detail("Pipeline Parallel Size (PP): %d", pp)
-	ui.Success("Configuration optimized for %d GPUs", len(gpus))
+	ui.Detail("Model: %s", rec.Model)
+	ui.Detail("Tensor Parallel Size (TP): %d", rec.TP)
+	ui.Detail("Pipeline Parallel Size (PP): %d", rec.PP)
+	ui.Detail("GPU Memory Utilization: %.2f", rec.MemoryUtil)
+	ui.Detail("Max Model Length: %d", rec.MaxModelLen)
+	if rec.KVCacheDtype == kvCacheDtypeFP8 {
+		ui.Detail("KV Cache Dtype: fp8 (tight VRAM — saves memory)")
+	}
+	ui.Detail("MLNode Image: ghcr.io/product-science/mlnode:%s", state.MLNodeImageTag)
+	ui.Detail("Attention Backend: %s", state.AttentionBackend)
 
+	if rec.PP > 1 {
+		ui.Warn("pipeline-parallel-size > 1: PoC v2 may not work with MQLLMEngineClient")
+	}
+
+	if !topology.HasNVLink && len(gpus) > 1 {
+		ui.Warn("Without NVLink, multi-GPU inference may have higher latency from PCIe bottleneck")
+	}
+
+	ui.Success("Configuration optimized for %d GPUs", len(gpus))
 	return nil
 }
 
-// recommendConfig returns recommended TP, PP, and model based on GPU setup
-func recommendConfig(gpuCount int, vramMB int) (tp, pp int, model string) {
+// GPURecommendation holds the full GPU config recommendation
+type GPURecommendation struct {
+	TP           int
+	PP           int
+	Model        string
+	MemoryUtil   float64
+	MaxModelLen  int
+	KVCacheDtype string // "auto" or "fp8"
+}
+
+// recommendConfig returns recommended configuration based on GPU setup.
+// Incorporates validator chat findings: memory utilization 0.88-0.94, fp8 kv-cache for tight VRAM.
+func recommendConfig(gpuCount int, vramMB int, _ string, hasNVLink bool) GPURecommendation {
 	totalVRAM := gpuCount * vramMB
 
 	switch {
-	case totalVRAM >= 320000: // 320GB+ (e.g., 4x H100 80GB)
-		// Large model needs full TP across all GPUs
-		return 8, 1, "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
-	case totalVRAM >= 160000 && gpuCount >= 8: // 160GB+ with 8+ GPUs
-		// Use pipeline parallelism for better throughput
-		return gpuCount / 2, 2, "Qwen/QwQ-32B"
-	case totalVRAM >= 80000: // 80GB+ (e.g., 4x RTX 4090)
-		return gpuCount, 1, "Qwen/QwQ-32B"
+	case totalVRAM >= 320000: // 320GB+ (e.g., 4x H100 80GB or 8x A100 40GB)
+		rec := GPURecommendation{
+			Model:        "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
+			MemoryUtil:   0.90,
+			KVCacheDtype: kvCacheDtypeAuto,
+		}
+		// 235B FP8 needs ~120GB for weights. Remaining VRAM for KV cache.
+		if gpuCount >= 8 && hasNVLink {
+			rec.TP = 8
+			rec.PP = 1
+			rec.MaxModelLen = 240000
+		} else if gpuCount >= 8 {
+			rec.TP = 4
+			rec.PP = 2
+			rec.MaxModelLen = 131072
+			ui.Warn("PP=2 may cause PoC v2 issues — consider 8-way TP if possible")
+		} else {
+			// 4x 80GB = 320GB, tight fit
+			rec.TP = gpuCount
+			rec.PP = 1
+			rec.MemoryUtil = 0.88 // tighter margin needed
+			rec.MaxModelLen = 16384
+		}
+		// 8x A100 40GB = 320GB, needs fp8 KV cache to avoid OOM
+		if vramMB <= 41000 {
+			rec.KVCacheDtype = kvCacheDtypeFP8
+			rec.MemoryUtil = 0.90
+		}
+		return rec
+
+	case totalVRAM >= 80000: // 80GB+ (e.g., 4x RTX 4090, 2x A100 80GB)
+		rec := GPURecommendation{
+			TP:           gpuCount,
+			PP:           1,
+			Model:        defaultModel,
+			MemoryUtil:   0.92,
+			MaxModelLen:  32768,
+			KVCacheDtype: kvCacheDtypeAuto,
+		}
+		// Tight VRAM: 4x 24GB = 96GB with 32B model = ~8GB per GPU for KV
+		if vramMB < 30000 {
+			rec.MemoryUtil = 0.90
+			rec.MaxModelLen = 24576
+		}
+		return rec
+
 	case totalVRAM >= 40000: // 40GB+ (e.g., 2x RTX 4090)
-		return gpuCount, 1, "Qwen/Qwen2.5-7B-Instruct"
+		return GPURecommendation{
+			TP:           gpuCount,
+			PP:           1,
+			Model:        "Qwen/Qwen3-32B-FP8",
+			MemoryUtil:   0.92,
+			MaxModelLen:  24576,
+			KVCacheDtype: kvCacheDtypeAuto,
+		}
+
+	default: // < 40GB — below minimum
+		return GPURecommendation{
+			TP:           1,
+			PP:           1,
+			Model:        "Qwen/Qwen3-32B-FP8",
+			MemoryUtil:   0.94,
+			MaxModelLen:  8192,
+			KVCacheDtype: kvCacheDtypeAuto,
+		}
+	}
+}
+
+// detectTopology returns GPU interconnect topology (mocked)
+func detectTopology(gpus []config.GPUInfo) config.GPUTopology {
+	if len(gpus) <= 1 {
+		return config.GPUTopology{HasNVLink: false, PCIeVersion: "4.0", Interconnect: "pcie"}
+	}
+	// Mocked: RTX 4090 has no NVLink, H100/A100 do
+	name := gpus[0].Name
+	if strings.Contains(name, "H100") || strings.Contains(name, "H200") || strings.Contains(name, "A100") {
+		return config.GPUTopology{HasNVLink: true, PCIeVersion: "5.0", Interconnect: "nvlink"}
+	}
+	return config.GPUTopology{HasNVLink: false, PCIeVersion: "4.0", Interconnect: "pcie"}
+}
+
+// selectMLNodeImage returns the appropriate mlnode image tag based on GPU architecture
+func selectMLNodeImage(arch string) string {
+	switch arch {
+	case "sm_90", "sm_90a": // H100, H200
+		return "3.0.12"
+	case "sm_100": // B200, B300
+		return mlnodeBlackwellTag
+	case "sm_120": // RTX 5090
+		return mlnodeBlackwellTag // sm120 build when available
 	default:
-		return 1, 1, "Qwen/Qwen2.5-7B-Instruct"
+		return "3.0.12"
+	}
+}
+
+// selectAttentionBackend returns the vLLM attention backend for the GPU architecture
+func selectAttentionBackend(arch string) string {
+	switch arch {
+	case "sm_100", "sm_120": // Blackwell: FlashAttention not available
+		return "FLASHINFER"
+	default:
+		return "FLASH_ATTN"
 	}
 }
 
