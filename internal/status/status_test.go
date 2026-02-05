@@ -201,74 +201,85 @@ func TestFetchOverviewStatus(t *testing.T) {
 func TestFetchMockedStatus(t *testing.T) {
 	s := FetchMockedStatus()
 
-	t.Run("Overview", func(t *testing.T) {
-		if s.Overview.ContainersRunning != 8 {
-			t.Errorf("ContainersRunning = %d, want 8", s.Overview.ContainersRunning)
-		}
-		if !s.Overview.NodeRegistered {
-			t.Error("NodeRegistered should be true")
-		}
-		if s.Overview.EpochNumber == 0 {
-			t.Error("EpochNumber should be non-zero")
-		}
-		if s.Overview.OverallStatus != StatusPass {
-			t.Errorf("OverallStatus = %q, want PASS", s.Overview.OverallStatus)
-		}
-	})
+	t.Run("Overview", func(t *testing.T) { checkMockedOverview(t, s) })
+	t.Run("Blockchain", func(t *testing.T) { checkMockedBlockchain(t, s) })
+	t.Run("MLNode", func(t *testing.T) { checkMockedMLNode(t, s) })
+	t.Run("Security", func(t *testing.T) { checkMockedSecurity(t, s) })
+	t.Run("Epoch", func(t *testing.T) { checkMockedEpoch(t, s) })
+}
 
-	t.Run("Blockchain", func(t *testing.T) {
-		if s.Blockchain.BlockHeight == 0 {
-			t.Error("BlockHeight should be non-zero")
-		}
-		if !s.Blockchain.Synced {
-			t.Error("Synced should be true")
-		}
-		if s.Blockchain.PeerCount == 0 {
-			t.Error("PeerCount should be non-zero")
-		}
-	})
+func checkMockedOverview(t *testing.T, s *NodeStatus) {
+	t.Helper()
+	if s.Overview.ContainersRunning != 8 {
+		t.Errorf("ContainersRunning = %d, want 8", s.Overview.ContainersRunning)
+	}
+	if !s.Overview.NodeRegistered {
+		t.Error("NodeRegistered should be true")
+	}
+	if s.Overview.EpochNumber == 0 {
+		t.Error("EpochNumber should be non-zero")
+	}
+	if s.Overview.OverallStatus != StatusPass {
+		t.Errorf("OverallStatus = %q, want PASS", s.Overview.OverallStatus)
+	}
+}
 
-	t.Run("MLNode", func(t *testing.T) {
-		if !s.MLNode.Enabled {
-			t.Error("Enabled should be true")
-		}
-		if s.MLNode.ModelName == "" {
-			t.Error("ModelName should not be empty")
-		}
-		if !s.MLNode.ModelLoaded {
-			t.Error("ModelLoaded should be true")
-		}
-		if s.MLNode.GPUCount == 0 {
-			t.Error("GPUCount should be non-zero")
-		}
-	})
+func checkMockedBlockchain(t *testing.T, s *NodeStatus) {
+	t.Helper()
+	if s.Blockchain.BlockHeight == 0 {
+		t.Error("BlockHeight should be non-zero")
+	}
+	if !s.Blockchain.Synced {
+		t.Error("Synced should be true")
+	}
+	if s.Blockchain.PeerCount == 0 {
+		t.Error("PeerCount should be non-zero")
+	}
+}
 
-	t.Run("Security", func(t *testing.T) {
-		if !s.Security.FirewallConfigured {
-			t.Error("FirewallConfigured should be true")
-		}
-		if !s.Security.DDoSProtection {
-			t.Error("DDoSProtection should be true")
-		}
-		if !s.Security.ColdKeyConfigured {
-			t.Error("ColdKeyConfigured should be true")
-		}
-		if !s.Security.WarmKeyConfigured {
-			t.Error("WarmKeyConfigured should be true")
-		}
-		if !s.Security.PermissionsGranted {
-			t.Error("PermissionsGranted should be true")
-		}
-	})
+func checkMockedMLNode(t *testing.T, s *NodeStatus) {
+	t.Helper()
+	if !s.MLNode.Enabled {
+		t.Error("Enabled should be true")
+	}
+	if s.MLNode.ModelName == "" {
+		t.Error("ModelName should not be empty")
+	}
+	if !s.MLNode.ModelLoaded {
+		t.Error("ModelLoaded should be true")
+	}
+	if s.MLNode.GPUCount == 0 {
+		t.Error("GPUCount should be non-zero")
+	}
+}
 
-	t.Run("Epoch", func(t *testing.T) {
-		if s.Epoch.EpochNumber == 0 {
-			t.Error("EpochNumber should be non-zero")
-		}
-		if !s.Epoch.Active {
-			t.Error("Active should be true")
-		}
-	})
+func checkMockedSecurity(t *testing.T, s *NodeStatus) {
+	t.Helper()
+	if !s.Security.FirewallConfigured {
+		t.Error("FirewallConfigured should be true")
+	}
+	if !s.Security.DDoSProtection {
+		t.Error("DDoSProtection should be true")
+	}
+	if !s.Security.ColdKeyConfigured {
+		t.Error("ColdKeyConfigured should be true")
+	}
+	if !s.Security.WarmKeyConfigured {
+		t.Error("WarmKeyConfigured should be true")
+	}
+	if !s.Security.PermissionsGranted {
+		t.Error("PermissionsGranted should be true")
+	}
+}
+
+func checkMockedEpoch(t *testing.T, s *NodeStatus) {
+	t.Helper()
+	if s.Epoch.EpochNumber == 0 {
+		t.Error("EpochNumber should be non-zero")
+	}
+	if !s.Epoch.Active {
+		t.Error("Active should be true")
+	}
 }
 
 func TestFetchStatusWithConfig_NilConfig(t *testing.T) {
@@ -341,103 +352,117 @@ func TestFetchSetupReport(t *testing.T) {
 	cfg := &StatusConfig{AdminURL: ts.URL}
 	fetchSetupReport(s, cfg)
 
-	t.Run("Overview", func(t *testing.T) {
-		if s.Overview.OverallStatus != StatusPass {
-			t.Errorf("OverallStatus = %q, want PASS", s.Overview.OverallStatus)
-		}
-		if s.Overview.ChecksPassed != 9 {
-			t.Errorf("ChecksPassed = %d, want 9", s.Overview.ChecksPassed)
-		}
-		if s.Overview.ChecksTotal != 11 {
-			t.Errorf("ChecksTotal = %d, want 11", s.Overview.ChecksTotal)
-		}
-	})
+	t.Run("Overview", func(t *testing.T) { checkReportOverview(t, s) })
+	t.Run("Epoch", func(t *testing.T) { checkReportEpoch(t, s) })
+	t.Run("Blockchain", func(t *testing.T) { checkReportBlockchain(t, s) })
+	t.Run("Security", func(t *testing.T) { checkReportSecurity(t, s) })
+	t.Run("MLNode", func(t *testing.T) { checkReportMLNode(t, s) })
+	t.Run("Registration", func(t *testing.T) { checkReportRegistration(t, s) })
+	t.Run("RawReport", func(t *testing.T) { checkReportRaw(t, s) })
+}
 
-	t.Run("Epoch", func(t *testing.T) {
-		if s.Epoch.EpochNumber != 62 {
-			t.Errorf("EpochNumber = %d, want 62", s.Epoch.EpochNumber)
-		}
-		if s.Epoch.Weight != 9120 {
-			t.Errorf("Weight = %d, want 9120", s.Epoch.Weight)
-		}
-		if !s.Epoch.Active {
-			t.Error("Active should be true")
-		}
-		if s.Epoch.MissPercentage != 2.5 {
-			t.Errorf("MissPercentage = %f, want 2.5", s.Epoch.MissPercentage)
-		}
-		if s.Epoch.MissedCount != 5 {
-			t.Errorf("MissedCount = %d, want 5", s.Epoch.MissedCount)
-		}
-	})
+func checkReportOverview(t *testing.T, s *NodeStatus) {
+	t.Helper()
+	if s.Overview.OverallStatus != StatusPass {
+		t.Errorf("OverallStatus = %q, want PASS", s.Overview.OverallStatus)
+	}
+	if s.Overview.ChecksPassed != 9 {
+		t.Errorf("ChecksPassed = %d, want 9", s.Overview.ChecksPassed)
+	}
+	if s.Overview.ChecksTotal != 11 {
+		t.Errorf("ChecksTotal = %d, want 11", s.Overview.ChecksTotal)
+	}
+}
 
-	t.Run("Blockchain", func(t *testing.T) {
-		if s.Blockchain.BlockHeight != 22216 {
-			t.Errorf("BlockHeight = %d, want 22216", s.Blockchain.BlockHeight)
-		}
-		if s.Blockchain.SecondsSinceBlk != 8 {
-			t.Errorf("SecondsSinceBlk = %d, want 8", s.Blockchain.SecondsSinceBlk)
-		}
-		if !s.Blockchain.Synced {
-			t.Error("Synced should be true")
-		}
-	})
+func checkReportEpoch(t *testing.T, s *NodeStatus) {
+	t.Helper()
+	if s.Epoch.EpochNumber != 62 {
+		t.Errorf("EpochNumber = %d, want 62", s.Epoch.EpochNumber)
+	}
+	if s.Epoch.Weight != 9120 {
+		t.Errorf("Weight = %d, want 9120", s.Epoch.Weight)
+	}
+	if !s.Epoch.Active {
+		t.Error("Active should be true")
+	}
+	if s.Epoch.MissPercentage != 2.5 {
+		t.Errorf("MissPercentage = %f, want 2.5", s.Epoch.MissPercentage)
+	}
+	if s.Epoch.MissedCount != 5 {
+		t.Errorf("MissedCount = %d, want 5", s.Epoch.MissedCount)
+	}
+}
 
-	t.Run("Security", func(t *testing.T) {
-		if !s.Security.ColdKeyConfigured {
-			t.Error("ColdKeyConfigured should be true")
-		}
-		if !s.Security.WarmKeyConfigured {
-			t.Error("WarmKeyConfigured should be true")
-		}
-		if !s.Security.PermissionsGranted {
-			t.Error("PermissionsGranted should be true")
-		}
-	})
+func checkReportBlockchain(t *testing.T, s *NodeStatus) {
+	t.Helper()
+	if s.Blockchain.BlockHeight != 22216 {
+		t.Errorf("BlockHeight = %d, want 22216", s.Blockchain.BlockHeight)
+	}
+	if s.Blockchain.SecondsSinceBlk != 8 {
+		t.Errorf("SecondsSinceBlk = %d, want 8", s.Blockchain.SecondsSinceBlk)
+	}
+	if !s.Blockchain.Synced {
+		t.Error("Synced should be true")
+	}
+}
 
-	t.Run("MLNode", func(t *testing.T) {
-		if s.MLNode.GPUCount != 1 {
-			t.Errorf("GPUCount = %d, want 1", s.MLNode.GPUCount)
-		}
-		if s.MLNode.GPUName != "NVIDIA A100" {
-			t.Errorf("GPUName = %q, want NVIDIA A100", s.MLNode.GPUName)
-		}
-		if s.MLNode.ModelName != "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8" {
-			t.Errorf("ModelName = %q, unexpected", s.MLNode.ModelName)
-		}
-		if !s.MLNode.ModelLoaded {
-			t.Error("ModelLoaded should be true")
-		}
-		// GPU detail fields
-		if len(s.MLNode.GPUs) != 1 {
-			t.Fatalf("GPUs len = %d, want 1", len(s.MLNode.GPUs))
-		}
-		gpu := s.MLNode.GPUs[0]
-		if gpu.TotalMemoryGB != 80 {
-			t.Errorf("TotalMemoryGB = %f, want 80", gpu.TotalMemoryGB)
-		}
-		if gpu.UtilizationPct != 95 {
-			t.Errorf("UtilizationPct = %d, want 95", gpu.UtilizationPct)
-		}
-		if gpu.TemperatureC != 65 {
-			t.Errorf("TemperatureC = %d, want 65", gpu.TemperatureC)
-		}
-	})
+func checkReportSecurity(t *testing.T, s *NodeStatus) {
+	t.Helper()
+	if !s.Security.ColdKeyConfigured {
+		t.Error("ColdKeyConfigured should be true")
+	}
+	if !s.Security.WarmKeyConfigured {
+		t.Error("WarmKeyConfigured should be true")
+	}
+	if !s.Security.PermissionsGranted {
+		t.Error("PermissionsGranted should be true")
+	}
+}
 
-	t.Run("Registration", func(t *testing.T) {
-		if !s.Overview.NodeRegistered {
-			t.Error("NodeRegistered should be true from consensus_key_match")
-		}
-	})
+func checkReportMLNode(t *testing.T, s *NodeStatus) {
+	t.Helper()
+	if s.MLNode.GPUCount != 1 {
+		t.Errorf("GPUCount = %d, want 1", s.MLNode.GPUCount)
+	}
+	if s.MLNode.GPUName != "NVIDIA A100" {
+		t.Errorf("GPUName = %q, want NVIDIA A100", s.MLNode.GPUName)
+	}
+	if s.MLNode.ModelName != "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8" {
+		t.Errorf("ModelName = %q, unexpected", s.MLNode.ModelName)
+	}
+	if !s.MLNode.ModelLoaded {
+		t.Error("ModelLoaded should be true")
+	}
+	if len(s.MLNode.GPUs) != 1 {
+		t.Fatalf("GPUs len = %d, want 1", len(s.MLNode.GPUs))
+	}
+	gpu := s.MLNode.GPUs[0]
+	if gpu.TotalMemoryGB != 80 {
+		t.Errorf("TotalMemoryGB = %f, want 80", gpu.TotalMemoryGB)
+	}
+	if gpu.UtilizationPct != 95 {
+		t.Errorf("UtilizationPct = %d, want 95", gpu.UtilizationPct)
+	}
+	if gpu.TemperatureC != 65 {
+		t.Errorf("TemperatureC = %d, want 65", gpu.TemperatureC)
+	}
+}
 
-	t.Run("RawReport", func(t *testing.T) {
-		if s.SetupReport == nil {
-			t.Fatal("SetupReport should not be nil")
-		}
-		if len(s.SetupReport.Checks) != 8 {
-			t.Errorf("Checks len = %d, want 8", len(s.SetupReport.Checks))
-		}
-	})
+func checkReportRegistration(t *testing.T, s *NodeStatus) {
+	t.Helper()
+	if !s.Overview.NodeRegistered {
+		t.Error("NodeRegistered should be true from consensus_key_match")
+	}
+}
+
+func checkReportRaw(t *testing.T, s *NodeStatus) {
+	t.Helper()
+	if s.SetupReport == nil {
+		t.Fatal("SetupReport should not be nil")
+	}
+	if len(s.SetupReport.Checks) != 8 {
+		t.Errorf("Checks len = %d, want 8", len(s.SetupReport.Checks))
+	}
 }
 
 func TestFetchSetupReport_WithFailures(t *testing.T) {
@@ -757,67 +782,77 @@ func TestFetchFullStatus_AllEndpoints(t *testing.T) {
 		t.Fatalf("FetchStatusWithConfig() error: %v", err)
 	}
 
-	t.Run("Overview", func(t *testing.T) {
-		if s.Overview.OverallStatus != StatusPass {
-			t.Errorf("OverallStatus = %q, want PASS", s.Overview.OverallStatus)
-		}
-		if s.Overview.ChecksPassed != 9 {
-			t.Errorf("ChecksPassed = %d, want 9", s.Overview.ChecksPassed)
-		}
-		if !s.Overview.NodeRegistered {
-			t.Error("NodeRegistered should be true")
-		}
-	})
+	t.Run("Overview", func(t *testing.T) { checkFullOverview(t, s) })
+	t.Run("Blockchain", func(t *testing.T) { checkFullBlockchain(t, s) })
+	t.Run("Epoch", func(t *testing.T) { checkFullEpoch(t, s) })
+	t.Run("MLNode", func(t *testing.T) { checkFullMLNode(t, s) })
+	t.Run("Security", func(t *testing.T) { checkFullSecurity(t, s) })
+}
 
-	t.Run("Blockchain", func(t *testing.T) {
-		// Tendermint RPC overrides setup/report height
-		if s.Blockchain.BlockHeight != 22250 {
-			t.Errorf("BlockHeight = %d, want 22250 (from Tendermint RPC)", s.Blockchain.BlockHeight)
-		}
-		if s.Blockchain.PeerCount != 8 {
-			t.Errorf("PeerCount = %d, want 8", s.Blockchain.PeerCount)
-		}
-		if s.Blockchain.NetworkHeight != 22300 {
-			t.Errorf("NetworkHeight = %d, want 22300", s.Blockchain.NetworkHeight)
-		}
-		if !s.Blockchain.IsValidator {
-			t.Error("IsValidator should be true")
-		}
-		if s.Blockchain.VotingPower != 9120 {
-			t.Errorf("VotingPower = %d, want 9120", s.Blockchain.VotingPower)
-		}
-	})
+func checkFullOverview(t *testing.T, s *NodeStatus) {
+	t.Helper()
+	if s.Overview.OverallStatus != StatusPass {
+		t.Errorf("OverallStatus = %q, want PASS", s.Overview.OverallStatus)
+	}
+	if s.Overview.ChecksPassed != 9 {
+		t.Errorf("ChecksPassed = %d, want 9", s.Overview.ChecksPassed)
+	}
+	if !s.Overview.NodeRegistered {
+		t.Error("NodeRegistered should be true")
+	}
+}
 
-	t.Run("Epoch", func(t *testing.T) {
-		if s.Epoch.EpochNumber != 62 {
-			t.Errorf("EpochNumber = %d, want 62", s.Epoch.EpochNumber)
-		}
-		if !s.Epoch.Active {
-			t.Error("Active should be true")
-		}
-	})
+func checkFullBlockchain(t *testing.T, s *NodeStatus) {
+	t.Helper()
+	if s.Blockchain.BlockHeight != 22250 {
+		t.Errorf("BlockHeight = %d, want 22250 (from Tendermint RPC)", s.Blockchain.BlockHeight)
+	}
+	if s.Blockchain.PeerCount != 8 {
+		t.Errorf("PeerCount = %d, want 8", s.Blockchain.PeerCount)
+	}
+	if s.Blockchain.NetworkHeight != 22300 {
+		t.Errorf("NetworkHeight = %d, want 22300", s.Blockchain.NetworkHeight)
+	}
+	if !s.Blockchain.IsValidator {
+		t.Error("IsValidator should be true")
+	}
+	if s.Blockchain.VotingPower != 9120 {
+		t.Errorf("VotingPower = %d, want 9120", s.Blockchain.VotingPower)
+	}
+}
 
-	t.Run("MLNode", func(t *testing.T) {
-		if !s.MLNode.Enabled {
-			t.Error("Enabled should be true")
-		}
-		if !s.MLNode.ModelLoaded {
-			t.Error("ModelLoaded should be true")
-		}
-		if s.MLNode.TPSize != 8 {
-			t.Errorf("TPSize = %d, want 8", s.MLNode.TPSize)
-		}
-	})
+func checkFullEpoch(t *testing.T, s *NodeStatus) {
+	t.Helper()
+	if s.Epoch.EpochNumber != 62 {
+		t.Errorf("EpochNumber = %d, want 62", s.Epoch.EpochNumber)
+	}
+	if !s.Epoch.Active {
+		t.Error("Active should be true")
+	}
+}
 
-	t.Run("Security", func(t *testing.T) {
-		if !s.Security.ColdKeyConfigured {
-			t.Error("ColdKeyConfigured should be true")
-		}
-		if !s.Security.WarmKeyConfigured {
-			t.Error("WarmKeyConfigured should be true")
-		}
-		if !s.Security.PermissionsGranted {
-			t.Error("PermissionsGranted should be true")
-		}
-	})
+func checkFullMLNode(t *testing.T, s *NodeStatus) {
+	t.Helper()
+	if !s.MLNode.Enabled {
+		t.Error("Enabled should be true")
+	}
+	if !s.MLNode.ModelLoaded {
+		t.Error("ModelLoaded should be true")
+	}
+	if s.MLNode.TPSize != 8 {
+		t.Errorf("TPSize = %d, want 8", s.MLNode.TPSize)
+	}
+}
+
+func checkFullSecurity(t *testing.T, s *NodeStatus) {
+	t.Helper()
+	if !s.Security.ColdKeyConfigured {
+		t.Error("ColdKeyConfigured should be true")
+	}
+	if !s.Security.WarmKeyConfigured {
+		t.Error("WarmKeyConfigured should be true")
+	}
+	if !s.Security.PermissionsGranted {
+		t.Error("PermissionsGranted should be true")
+	}
 }
