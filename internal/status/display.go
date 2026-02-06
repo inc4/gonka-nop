@@ -24,6 +24,7 @@ func Display(s *NodeStatus) {
 	printBlockchain(s)
 	printEpoch(s)
 	printMLNode(s)
+	printNodeConfig(s)
 	printSecurity(s)
 }
 
@@ -53,13 +54,13 @@ func printOverview(s *NodeStatus) {
 		}
 	}
 
-	// Containers
-	if s.Overview.ContainersRunning == s.Overview.ContainersTotal {
-		printOK("Containers: %d/%d running", s.Overview.ContainersRunning, s.Overview.ContainersTotal)
+	// Containers — inferred from API checks, not direct docker access
+	if s.Overview.ContainersRunning >= 5 {
+		printOK("Core services: Running (node, api, mlnode verified)")
 	} else if s.Overview.ContainersRunning > 0 {
-		printWarn("Containers: %d/%d running", s.Overview.ContainersRunning, s.Overview.ContainersTotal)
+		printWarn("Core services: %d/%d verified", s.Overview.ContainersRunning, s.Overview.ContainersTotal)
 	} else {
-		printFail("Containers: %d/%d running", s.Overview.ContainersRunning, s.Overview.ContainersTotal)
+		printFail("Core services: Not reachable")
 	}
 
 	// Registration
@@ -80,6 +81,11 @@ func printOverview(s *NodeStatus) {
 		printWarn("Epoch %d: Not active", s.Overview.EpochNumber)
 	} else {
 		printWarn("Epoch participation: Inactive")
+	}
+
+	// API version
+	if s.NodeConfig.APIVersion != "" {
+		printInfo("API version", "%s", s.NodeConfig.APIVersion)
 	}
 }
 
@@ -127,21 +133,13 @@ func printBlockchain(s *NodeStatus) {
 
 	// Validator status
 	if s.Blockchain.IsValidator {
-		printOK("Validator: Active")
+		if s.Blockchain.VotingPower > 0 {
+			printOK("Validator: Active (power: %d)", s.Blockchain.VotingPower)
+		} else {
+			printOK("Validator: Active")
+		}
 	} else {
 		printInfo("Validator", "Not in active set")
-	}
-
-	// Miss rate (critical for validators)
-	if s.Blockchain.TotalBlocks > 0 {
-		missPercent := s.Blockchain.MissRate * 100
-		if missPercent < 5 {
-			printOK("Miss rate: %.1f%% (%d/%d blocks missed)", missPercent, s.Blockchain.MissedBlocks, s.Blockchain.TotalBlocks)
-		} else if missPercent < 20 {
-			printWarn("Miss rate: %.1f%% (%d/%d blocks missed) — investigate", missPercent, s.Blockchain.MissedBlocks, s.Blockchain.TotalBlocks)
-		} else {
-			printFail("Miss rate: %.1f%% (%d/%d blocks missed) — CRITICAL: risk of jailing", missPercent, s.Blockchain.MissedBlocks, s.Blockchain.TotalBlocks)
-		}
 	}
 }
 
@@ -158,28 +156,60 @@ func printEpoch(s *NodeStatus) {
 		printWarn("Epoch %d: Not active", s.Epoch.EpochNumber)
 	}
 
+	// PoC weight (from epoch_ml_nodes — the actual weight used for PoC)
+	if s.Epoch.PoCWeight > 0 {
+		printInfo("PoC weight", "%d", s.Epoch.PoCWeight)
+	}
+
+	// Timeslot allocation
+	if len(s.Epoch.TimeslotAllocation) > 0 {
+		slots := formatTimeslots(s.Epoch.TimeslotAllocation)
+		printInfo("Timeslots", "%s", slots)
+	}
+
 	// Miss rate
 	if s.Epoch.TotalCount > 0 {
-		if s.Epoch.MissPercentage < 5 {
-			printOK("Miss rate: %.1f%% (%d/%d requests missed)", s.Epoch.MissPercentage, s.Epoch.MissedCount, s.Epoch.TotalCount)
-		} else if s.Epoch.MissPercentage < 20 {
-			printWarn("Miss rate: %.1f%% (%d/%d requests missed)", s.Epoch.MissPercentage, s.Epoch.MissedCount, s.Epoch.TotalCount)
-		} else {
-			printFail("Miss rate: %.1f%% (%d/%d requests missed) — risk of jailing", s.Epoch.MissPercentage, s.Epoch.MissedCount, s.Epoch.TotalCount)
+		missStr := fmt.Sprintf("%.1f%% (%d/%d requests", s.Epoch.MissPercentage, s.Epoch.MissedCount, s.Epoch.TotalCount)
+		if s.Epoch.InferenceCount > 0 {
+			missStr += fmt.Sprintf(", %d inferences served", s.Epoch.InferenceCount)
 		}
+		missStr += ")"
+		if s.Epoch.MissPercentage < 5 {
+			printOK("Miss rate: %s", missStr)
+		} else if s.Epoch.MissPercentage < 20 {
+			printWarn("Miss rate: %s", missStr)
+		} else {
+			printFail("Miss rate: %s — risk of jailing", missStr)
+		}
+	} else if s.Epoch.MissCheckPassed {
+		printOK("Miss rate: 0.0%% (no requests yet)")
 	} else {
-		printInfo("Miss rate", "No requests in current epoch")
+		printInfo("Miss rate", "No data")
+	}
+
+	// Upcoming epoch
+	if s.Epoch.UpcomingEpoch > 0 {
+		printInfo("Upcoming", "Epoch %d", s.Epoch.UpcomingEpoch)
+	}
+
+	// Previous epoch reward claim
+	if s.Epoch.PrevEpochIndex > 0 {
+		if s.Epoch.PrevEpochClaimed {
+			printOK("Reward (epoch %d): Claimed", s.Epoch.PrevEpochIndex)
+		} else {
+			printWarn("Reward (epoch %d): Not claimed", s.Epoch.PrevEpochIndex)
+		}
 	}
 }
 
 func printMLNode(s *NodeStatus) {
 	printSection("ML Node")
 
-	// Status
+	// Enabled state
 	if s.MLNode.Enabled {
-		printOK("Status: Enabled")
+		printOK("Enabled: Yes")
 	} else {
-		printWarn("Status: Disabled")
+		printWarn("Enabled: No")
 	}
 
 	// Model
@@ -191,45 +221,76 @@ func printMLNode(s *NodeStatus) {
 		printFail("Model: None configured")
 	}
 
-	// GPUs
+	printMLNodeHardware(s)
+	printMLNodeConfig(s)
+	printMLNodePoCStatus(s)
+	printMLNodeFreshness(s)
+}
+
+func printMLNodeHardware(s *NodeStatus) {
 	if s.MLNode.Hardware != "" {
 		printInfo("Hardware", "%s", s.MLNode.Hardware)
 	} else if s.MLNode.GPUCount > 0 {
 		printInfo("GPUs", "%dx %s", s.MLNode.GPUCount, s.MLNode.GPUName)
 	}
 
-	// GPU details from setup/report
 	for _, gpu := range s.MLNode.GPUs {
 		printInfo("GPU", "%s (VRAM: %.0f/%.0fGB, Util: %d%%, Temp: %dC)",
 			gpu.Name, gpu.UsedMemoryGB, gpu.TotalMemoryGB, gpu.UtilizationPct, gpu.TemperatureC)
 	}
+}
 
-	// TP/PP configuration
-	if s.MLNode.TPSize > 0 {
-		configStr := fmt.Sprintf("TP=%d", s.MLNode.TPSize)
-		if s.MLNode.PPSize > 0 {
-			configStr += fmt.Sprintf(" PP=%d", s.MLNode.PPSize)
-		}
-		if s.MLNode.MemoryUtil > 0 {
-			configStr += fmt.Sprintf(" MemUtil=%.2f", s.MLNode.MemoryUtil)
-		}
-		if s.MLNode.MaxModelLen > 0 {
-			configStr += fmt.Sprintf(" MaxLen=%d", s.MLNode.MaxModelLen)
-		}
-		printInfo("Config", "%s", configStr)
+func printMLNodeConfig(s *NodeStatus) {
+	if s.MLNode.TPSize == 0 {
+		return
 	}
+	configStr := fmt.Sprintf("TP=%d", s.MLNode.TPSize)
+	if s.MLNode.PPSize > 0 {
+		configStr += fmt.Sprintf(" PP=%d", s.MLNode.PPSize)
+	}
+	if s.MLNode.MemoryUtil > 0 {
+		configStr += fmt.Sprintf(" MemUtil=%.2f", s.MLNode.MemoryUtil)
+	}
+	if s.MLNode.MaxModelLen > 0 {
+		configStr += fmt.Sprintf(" MaxLen=%d", s.MLNode.MaxModelLen)
+	}
+	printInfo("Config", "%s", configStr)
+}
 
-	// PoC Status
+func printMLNodePoCStatus(s *NodeStatus) {
 	switch s.MLNode.PoCStatus {
-	case "Participating":
-		printOK("PoC Status: Participating")
-	case "Pending":
-		printWarn("PoC Status: Pending verification")
+	case "INFERENCE":
+		printOK("Status: Serving inference")
+	case "POC":
+		printOK("Status: PoC generation active")
+	case "FAILED":
+		printFail("Status: FAILED")
+	case "":
+		// No data available
 	default:
-		printInfo("PoC Status", "%s", s.MLNode.PoCStatus)
+		printInfo("Status", "%s", s.MLNode.PoCStatus)
 	}
 
-	// Last PoC
+	if s.MLNode.IntendedStatus != "" && s.MLNode.PoCStatus != "" &&
+		s.MLNode.IntendedStatus != s.MLNode.PoCStatus {
+		printWarn("Status mismatch: intended=%s current=%s (transitioning)", s.MLNode.IntendedStatus, s.MLNode.PoCStatus)
+	}
+
+	if s.MLNode.PoCNodeStatus != "" && s.MLNode.PoCNodeStatus != "IDLE" {
+		printInfo("PoC subsystem", "%s", s.MLNode.PoCNodeStatus)
+	}
+}
+
+func printMLNodeFreshness(s *NodeStatus) {
+	if !s.MLNode.StatusUpdated.IsZero() {
+		ago := time.Since(s.MLNode.StatusUpdated)
+		if ago > 10*time.Minute {
+			printWarn("Status updated: %s ago (stale — possible issue)", formatDuration(ago))
+		} else {
+			printInfo("Status updated", "%s ago", formatDuration(ago))
+		}
+	}
+
 	if !s.MLNode.LastPoCTime.IsZero() {
 		ago := formatDuration(time.Since(s.MLNode.LastPoCTime))
 		if s.MLNode.LastPoCOK {
@@ -273,6 +334,37 @@ func printSecurity(s *NodeStatus) {
 
 	if s.Security.InternalPortsBound {
 		printOK("Internal ports: Bound to 127.0.0.1")
+	}
+}
+
+func printNodeConfig(s *NodeStatus) {
+	// Only show if we have any config data
+	if s.NodeConfig.PublicURL == "" && s.NodeConfig.APIVersion == "" {
+		return
+	}
+
+	printSection("Node Config")
+
+	if s.NodeConfig.PublicURL != "" {
+		printInfo("Public URL", "%s", s.NodeConfig.PublicURL)
+	}
+
+	if s.NodeConfig.PoCCallbackURL != "" {
+		printInfo("PoC callback", "%s", s.NodeConfig.PoCCallbackURL)
+	}
+
+	if s.NodeConfig.SeedAPIURL != "" {
+		printInfo("Seed API", "%s", s.NodeConfig.SeedAPIURL)
+	}
+
+	// API processing lag
+	if s.NodeConfig.HeightLag > 5 {
+		printWarn("API processing lag: %d blocks behind chain", s.NodeConfig.HeightLag)
+	}
+
+	// Upgrade plan
+	if s.NodeConfig.UpgradeName != "" {
+		printWarn("Upgrade pending: %s at height %s", s.NodeConfig.UpgradeName, formatNumber(s.NodeConfig.UpgradeHeight))
 	}
 }
 
@@ -334,4 +426,14 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dh", int(d.Hours()))
 	}
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
+}
+
+func formatTimeslots(slots []bool) string {
+	allocated := 0
+	for _, s := range slots {
+		if s {
+			allocated++
+		}
+	}
+	return fmt.Sprintf("%d/%d allocated", allocated, len(slots))
 }

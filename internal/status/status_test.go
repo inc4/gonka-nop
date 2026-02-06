@@ -88,35 +88,30 @@ func TestFetchBlockchainStatus_Unavailable(t *testing.T) {
 func TestFetchMLNodeStatus(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/admin/v1/nodes", func(w http.ResponseWriter, _ *http.Request) {
-		nodes := []AdminMLNode{
-			{
-				ID:            "node1",
-				Host:          "inference",
-				InferencePort: 5000,
-				PoCPort:       8080,
-				MaxConcurrent: 500,
-				Models:        []string{"Qwen/QwQ-32B"},
-				Enabled:       true,
-			},
-		}
+		// Real API returns nested {node, state} structure
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(nodes)
+		_, _ = w.Write([]byte(`[{
+			"node": {
+				"id": "node1", "host": "inference",
+				"inference_port": 5000, "poc_port": 8080, "max_concurrent": 500,
+				"models": {"Qwen/QwQ-32B": {"args": ["--tensor-parallel-size", "4"]}},
+				"hardware": [{"type": "NVIDIA GeForce RTX 4090 | 24GB", "count": 4}]
+			},
+			"state": {
+				"current_status": "INFERENCE",
+				"poc_current_status": "IDLE",
+				"failure_reason": "",
+				"admin_state": {"enabled": true, "epoch": 67}
+			}
+		}]`))
 	})
 	adminTS := httptest.NewServer(mux)
 	defer adminTS.Close()
 
-	vllmMux := http.NewServeMux()
-	vllmMux.HandleFunc("/v1/models", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"data": []}`))
-	})
-	vllmTS := httptest.NewServer(vllmMux)
-	defer vllmTS.Close()
-
 	cfg := &StatusConfig{
 		TendermintURL: "http://127.0.0.1:1", // unreachable
 		AdminURL:      adminTS.URL,
-		VLLMHealthURL: vllmTS.URL,
+		VLLMHealthURL: "http://127.0.0.1:1",
 	}
 
 	status, err := FetchStatusWithConfig("", cfg)
@@ -130,69 +125,71 @@ func TestFetchMLNodeStatus(t *testing.T) {
 	if status.MLNode.ModelName != "Qwen/QwQ-32B" {
 		t.Errorf("MLNode.ModelName = %q, want %q", status.MLNode.ModelName, "Qwen/QwQ-32B")
 	}
-	if !status.MLNode.ModelLoaded {
-		t.Error("MLNode.ModelLoaded should be true")
+	if status.MLNode.PoCStatus != "INFERENCE" {
+		t.Errorf("MLNode.PoCStatus = %q, want %q", status.MLNode.PoCStatus, "INFERENCE")
+	}
+	if status.MLNode.TPSize != 4 {
+		t.Errorf("MLNode.TPSize = %d, want 4", status.MLNode.TPSize)
+	}
+	if status.MLNode.Hardware != "4x NVIDIA GeForce RTX 4090 | 24GB" {
+		t.Errorf("MLNode.Hardware = %q, unexpected", status.MLNode.Hardware)
 	}
 }
 
 func TestFetchOverviewStatus(t *testing.T) {
 	tests := []struct {
 		name           string
-		blockHeight    int64
-		modelLoaded    bool
+		report         *SetupReport
 		wantContainers int
-		wantRegistered bool
-		validatorAddr  string
 	}{
 		{
-			name:           "All services down",
-			blockHeight:    0,
-			modelLoaded:    false,
+			name:           "No report (API unreachable)",
+			report:         nil,
 			wantContainers: 0,
-			wantRegistered: false,
 		},
 		{
-			name:           "Blockchain up only",
-			blockHeight:    100,
-			modelLoaded:    false,
-			wantContainers: 3,
-			wantRegistered: true,
-			validatorAddr:  "ABC123",
+			name: "All checks pass",
+			report: &SetupReport{
+				OverallStatus: StatusPass,
+				Checks: []SetupCheck{
+					{ID: "block_sync", Status: StatusPass},
+					{ID: "mlnode_node1", Status: StatusPass},
+				},
+			},
+			wantContainers: 5, // api(1) + node+tmkms(2) + mlnode+inference(2)
 		},
 		{
-			name:           "Blockchain + ML up",
-			blockHeight:    100,
-			modelLoaded:    true,
-			wantContainers: 4,
-			wantRegistered: true,
-			validatorAddr:  "ABC123",
+			name: "Block sync pass, ML fail",
+			report: &SetupReport{
+				OverallStatus: StatusFail,
+				Checks: []SetupCheck{
+					{ID: "block_sync", Status: StatusPass},
+					{ID: "mlnode_node1", Status: StatusFail},
+				},
+			},
+			wantContainers: 3, // api(1) + node+tmkms(2)
 		},
 		{
-			name:           "ML up but blockchain down",
-			blockHeight:    0,
-			modelLoaded:    true,
-			wantContainers: 1,
-			wantRegistered: false,
+			name: "Only API reachable (all checks fail)",
+			report: &SetupReport{
+				OverallStatus: StatusFail,
+				Checks: []SetupCheck{
+					{ID: "block_sync", Status: StatusFail},
+					{ID: "mlnode_node1", Status: StatusFail},
+				},
+			},
+			wantContainers: 1, // api only
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			status := &NodeStatus{}
-			status.Blockchain.BlockHeight = tt.blockHeight
-			status.Blockchain.ValidatorAddr = tt.validatorAddr
-			status.MLNode.ModelLoaded = tt.modelLoaded
+			status := &NodeStatus{SetupReport: tt.report}
 
 			fetchOverviewStatus(status)
 
 			if status.Overview.ContainersRunning != tt.wantContainers {
 				t.Errorf("ContainersRunning = %d, want %d", status.Overview.ContainersRunning, tt.wantContainers)
-			}
-			if status.Overview.ContainersTotal != 8 {
-				t.Errorf("ContainersTotal = %d, want 8", status.Overview.ContainersTotal)
-			}
-			if status.Overview.NodeRegistered != tt.wantRegistered {
-				t.Errorf("NodeRegistered = %v, want %v", status.Overview.NodeRegistered, tt.wantRegistered)
 			}
 		})
 	}
@@ -280,6 +277,18 @@ func checkMockedEpoch(t *testing.T, s *NodeStatus) {
 	if !s.Epoch.Active {
 		t.Error("Active should be true")
 	}
+	if s.Epoch.PoCWeight != 4200 {
+		t.Errorf("PoCWeight = %d, want 4200", s.Epoch.PoCWeight)
+	}
+	if len(s.Epoch.TimeslotAllocation) != 2 {
+		t.Errorf("TimeslotAllocation len = %d, want 2", len(s.Epoch.TimeslotAllocation))
+	}
+	if !s.Epoch.PrevEpochClaimed {
+		t.Error("PrevEpochClaimed should be true")
+	}
+	if s.NodeConfig.APIVersion != "v3.0.8" {
+		t.Errorf("Mocked APIVersion = %q, want v3.0.8", s.NodeConfig.APIVersion)
+	}
 }
 
 func TestFetchStatusWithConfig_NilConfig(t *testing.T) {
@@ -331,8 +340,9 @@ func setupReportJSON() string {
 			{"id": "permissions_granted", "status": "PASS", "message": "ML permissions granted", "details": {"granted": 27, "missing": 0}},
 			{"id": "consensus_key_match", "status": "PASS", "message": "Consensus key matches"},
 			{"id": "active_in_epoch", "status": "PASS", "message": "Active in epoch 62", "details": {"epoch": 62, "weight": 9120}},
+			{"id": "validator_in_set", "status": "PASS", "message": "Validator is active", "details": {"consensus_pubkey": "abc123"}},
 			{"id": "block_sync", "status": "PASS", "message": "Block sync OK", "details": {"latest_height": 22216, "seconds_since_block": 8, "catching_up": false}},
-			{"id": "missed_requests_threshold", "status": "PASS", "message": "Miss rate within threshold", "details": {"missed_percentage": 2.5, "missed_count": 5, "total_count": 200}},
+			{"id": "missed_requests_threshold", "status": "PASS", "message": "Miss rate within threshold", "details": {"missed_percentage": 2.5, "missed_requests": 5, "total_requests": 200}},
 			{"id": "mlnode_node1", "status": "PASS", "message": "MLNode healthy", "details": {"gpus": [{"name": "NVIDIA A100", "total_memory_gb": 80, "used_memory_gb": 72, "free_memory_gb": 8, "utilization_percent": 95, "temperature_c": 65, "available": true}], "models": ["Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"]}}
 		],
 		"summary": {"total_checks": 11, "passed_checks": 9, "failed_checks": 2}
@@ -404,6 +414,12 @@ func checkReportBlockchain(t *testing.T, s *NodeStatus) {
 	if !s.Blockchain.Synced {
 		t.Error("Synced should be true")
 	}
+	if !s.Blockchain.IsValidator {
+		t.Error("IsValidator should be true from validator_in_set check")
+	}
+	if s.Blockchain.VotingPower != 9120 {
+		t.Errorf("VotingPower = %d, want 9120 (from epoch weight)", s.Blockchain.VotingPower)
+	}
 }
 
 func checkReportSecurity(t *testing.T, s *NodeStatus) {
@@ -460,8 +476,8 @@ func checkReportRaw(t *testing.T, s *NodeStatus) {
 	if s.SetupReport == nil {
 		t.Fatal("SetupReport should not be nil")
 	}
-	if len(s.SetupReport.Checks) != 8 {
-		t.Errorf("Checks len = %d, want 8", len(s.SetupReport.Checks))
+	if len(s.SetupReport.Checks) != 9 {
+		t.Errorf("Checks len = %d, want 9", len(s.SetupReport.Checks))
 	}
 }
 
@@ -525,9 +541,18 @@ func TestFetchAdminConfig(t *testing.T) {
 	mux.HandleFunc("/admin/v1/config", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
-			"current_seed": {"epoch_index": 62},
-			"previous_seed": {"epoch_index": 61},
+			"api": {
+				"public_url": "http://my-node.example.com:8000",
+				"poc_callback_url": "http://api:9100"
+			},
+			"current_seed": {"seed": 123, "epoch_index": 62, "claimed": false},
+			"previous_seed": {"seed": 456, "epoch_index": 61, "claimed": true},
+			"upcoming_seed": {"seed": 789, "epoch_index": 63, "claimed": false},
 			"current_height": 22300,
+			"last_processed_height": 22298,
+			"current_node_version": "v3.0.8",
+			"upgrade_plan": {"name": "v0.2.9", "height": 50000},
+			"chain_node": {"seed_api_url": "http://89.169.111.79:8000"},
 			"nodes": [{
 				"id": "node1",
 				"host": "inference",
@@ -565,7 +590,13 @@ func TestFetchAdminConfig(t *testing.T) {
 		t.Errorf("BlockLag = %d, want 100", status.Blockchain.BlockLag)
 	}
 
-	// ML Node config
+	checkAdminConfigMLNode(t, status)
+	checkAdminConfigNodeConfig(t, status)
+	checkAdminConfigSeeds(t, status)
+}
+
+func checkAdminConfigMLNode(t *testing.T, status *NodeStatus) {
+	t.Helper()
 	if status.MLNode.ModelName != "Qwen/QwQ-32B" {
 		t.Errorf("ModelName = %q, want Qwen/QwQ-32B", status.MLNode.ModelName)
 	}
@@ -581,8 +612,43 @@ func TestFetchAdminConfig(t *testing.T) {
 	if status.MLNode.Hardware != "4x NVIDIA GeForce RTX 4090 | 24GB" {
 		t.Errorf("Hardware = %q, unexpected", status.MLNode.Hardware)
 	}
-	if !status.MLNode.Enabled {
-		t.Error("Enabled should be true")
+}
+
+func checkAdminConfigNodeConfig(t *testing.T, status *NodeStatus) {
+	t.Helper()
+	if status.NodeConfig.PublicURL != "http://my-node.example.com:8000" {
+		t.Errorf("PublicURL = %q, unexpected", status.NodeConfig.PublicURL)
+	}
+	if status.NodeConfig.PoCCallbackURL != "http://api:9100" {
+		t.Errorf("PoCCallbackURL = %q, unexpected", status.NodeConfig.PoCCallbackURL)
+	}
+	if status.NodeConfig.APIVersion != "v3.0.8" {
+		t.Errorf("APIVersion = %q, want v3.0.8", status.NodeConfig.APIVersion)
+	}
+	if status.NodeConfig.SeedAPIURL != "http://89.169.111.79:8000" {
+		t.Errorf("SeedAPIURL = %q, unexpected", status.NodeConfig.SeedAPIURL)
+	}
+	if status.NodeConfig.UpgradeName != "v0.2.9" {
+		t.Errorf("UpgradeName = %q, want v0.2.9", status.NodeConfig.UpgradeName)
+	}
+	if status.NodeConfig.UpgradeHeight != 50000 {
+		t.Errorf("UpgradeHeight = %d, want 50000", status.NodeConfig.UpgradeHeight)
+	}
+	if status.NodeConfig.HeightLag != 2 {
+		t.Errorf("HeightLag = %d, want 2", status.NodeConfig.HeightLag)
+	}
+}
+
+func checkAdminConfigSeeds(t *testing.T, status *NodeStatus) {
+	t.Helper()
+	if !status.Epoch.PrevEpochClaimed {
+		t.Error("PrevEpochClaimed should be true")
+	}
+	if status.Epoch.PrevEpochIndex != 61 {
+		t.Errorf("PrevEpochIndex = %d, want 61", status.Epoch.PrevEpochIndex)
+	}
+	if status.Epoch.UpcomingEpoch != 63 {
+		t.Errorf("UpcomingEpoch = %d, want 63", status.Epoch.UpcomingEpoch)
 	}
 }
 
@@ -730,10 +796,21 @@ func TestFetchFullStatus_AllEndpoints(t *testing.T) {
 		}`))
 	})
 
-	// Admin nodes
+	// Admin nodes (real nested structure)
 	mux.HandleFunc("/admin/v1/nodes", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[{"id": "node1", "host": "inference", "inference_port": 5000, "poc_port": 8080, "max_concurrent": 500, "models": ["Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"], "enabled": true}]`))
+		_, _ = w.Write([]byte(`[{
+			"node": {
+				"id": "node1", "host": "inference", "inference_port": 5000, "poc_port": 8080,
+				"max_concurrent": 500,
+				"models": {"Qwen/Qwen3-235B-A22B-Instruct-2507-FP8": {"args": ["--tensor-parallel-size", "8"]}},
+				"hardware": [{"type": "NVIDIA A100 80GB", "count": 8}]
+			},
+			"state": {
+				"current_status": "INFERENCE", "poc_current_status": "IDLE",
+				"admin_state": {"enabled": true, "epoch": 62}
+			}
+		}]`))
 	})
 
 	adminTS := httptest.NewServer(mux)

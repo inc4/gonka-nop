@@ -315,36 +315,19 @@ func runCleanup(_ *cobra.Command, _ []string) error {
 var mlNodeCmd = &cobra.Command{
 	Use:   "ml-node",
 	Short: "Manage ML nodes via Admin API",
-	Long: `Manage ML nodes through the Admin API (http://127.0.0.1:9200).
+	Long: `Manage ML nodes through the Admin API.
 
 Subcommands:
   list      - List all configured ML nodes
-  add       - Register a new ML node
-  enable    - Enable an ML node for PoC
-  disable   - Disable an ML node
   status    - Show detailed ML node status
+  enable    - Enable an ML node for PoC/inference
+  disable   - Disable an ML node
 
 Examples:
   gonka-nop ml-node list
-  gonka-nop ml-node add --host 127.0.0.1 --port 5050 --poc-port 8080
-  gonka-nop ml-node enable <node-id>
-  gonka-nop ml-node disable <node-id>
-  gonka-nop ml-node status`,
-	RunE: runMLNode,
-}
-
-func runMLNode(_ *cobra.Command, _ []string) error {
-	fmt.Println("ML Node command — planned for M6 (Operations)")
-	fmt.Println()
-	fmt.Println("Admin API wrapper for:")
-	fmt.Println("  GET    /admin/v1/nodes          — List nodes")
-	fmt.Println("  POST   /admin/v1/nodes          — Add node")
-	fmt.Println("  POST   /admin/v1/nodes/:id/enable  — Enable node")
-	fmt.Println("  POST   /admin/v1/nodes/:id/disable — Disable node")
-	fmt.Println()
-	fmt.Println("Example (manual):")
-	fmt.Println("  curl http://127.0.0.1:9200/admin/v1/nodes")
-	return nil
+  gonka-nop ml-node status
+  gonka-nop ml-node enable node1
+  gonka-nop ml-node disable node1`,
 }
 
 // GetOutputDir returns the output directory
