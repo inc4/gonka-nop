@@ -21,6 +21,7 @@ type NodeStatus struct {
 	Epoch      EpochStatus
 	MLNode     MLNodeStatus
 	Security   SecurityStatus
+	NodeConfig NodeConfigStatus
 
 	// Raw data from setup/report for display
 	SetupReport *SetupReport
@@ -64,30 +65,56 @@ type BlockchainStatus struct {
 
 // EpochStatus holds epoch participation details
 type EpochStatus struct {
-	EpochNumber    int
-	Active         bool
-	Weight         int
-	MissPercentage float64
-	MissedCount    int
-	TotalCount     int
+	EpochNumber     int
+	Active          bool
+	Weight          int
+	PoCWeight       int // from epoch_ml_nodes — actual PoC weight assigned
+	MissPercentage  float64
+	MissedCount     int
+	TotalCount      int
+	InferenceCount  int  // total inferences served (not just misses)
+	MissCheckPassed bool // true if the missed_requests_threshold check passed
+
+	// Timeslot allocation from epoch_ml_nodes
+	TimeslotAllocation []bool
+
+	// Reward claim status from /admin/v1/config seeds
+	PrevEpochClaimed bool
+	PrevEpochIndex   int
+	UpcomingEpoch    int
 }
 
 // MLNodeStatus holds ML node metrics
 type MLNodeStatus struct {
-	Enabled     bool
-	ModelName   string
-	ModelLoaded bool
-	GPUCount    int
-	GPUName     string
-	GPUs        []GPUDetail
-	TPSize      int
-	PPSize      int
-	MemoryUtil  float64
-	MaxModelLen int
-	PoCStatus   string
-	LastPoCTime time.Time
-	LastPoCOK   bool
-	Hardware    string // formatted hardware string from report
+	Enabled        bool
+	EnabledEpoch   int // epoch when enable took effect
+	ModelName      string
+	ModelLoaded    bool
+	GPUCount       int
+	GPUName        string
+	GPUs           []GPUDetail
+	TPSize         int
+	PPSize         int
+	MemoryUtil     float64
+	MaxModelLen    int
+	PoCStatus      string // current_status from admin API
+	IntendedStatus string // intended_status — mismatch with PoCStatus = transitioning
+	PoCNodeStatus  string // poc_current_status
+	LastPoCTime    time.Time
+	LastPoCOK      bool
+	Hardware       string    // formatted hardware string from report
+	StatusUpdated  time.Time // when state was last updated
+}
+
+// NodeConfigStatus holds node configuration details from /admin/v1/config
+type NodeConfigStatus struct {
+	PublicURL      string
+	PoCCallbackURL string
+	APIVersion     string
+	SeedAPIURL     string
+	UpgradeName    string
+	UpgradeHeight  int64
+	HeightLag      int64 // current_height - last_processed_height
 }
 
 // GPUDetail holds individual GPU info from setup/report
@@ -142,15 +169,40 @@ type SetupSummary struct {
 
 // AdminConfig represents the response from /admin/v1/config
 type AdminConfig struct {
-	CurrentSeed   *EpochSeed        `json:"current_seed"`
-	PreviousSeed  *EpochSeed        `json:"previous_seed"`
-	CurrentHeight int64             `json:"current_height"`
-	Nodes         []AdminNodeConfig `json:"nodes"`
+	API                 AdminAPIConfig    `json:"api"`
+	Nodes               []AdminNodeConfig `json:"nodes"`
+	CurrentSeed         *EpochSeed        `json:"current_seed"`
+	PreviousSeed        *EpochSeed        `json:"previous_seed"`
+	UpcomingSeed        *EpochSeed        `json:"upcoming_seed"`
+	CurrentHeight       int64             `json:"current_height"`
+	LastProcessedHeight int64             `json:"last_processed_height"`
+	CurrentNodeVersion  string            `json:"current_node_version"`
+	UpgradePlan         AdminUpgradePlan  `json:"upgrade_plan"`
+	ChainNode           AdminChainNode    `json:"chain_node"`
 }
 
 // EpochSeed holds epoch seed info
 type EpochSeed struct {
-	EpochIndex int `json:"epoch_index"`
+	Seed       int64 `json:"seed"`
+	EpochIndex int   `json:"epoch_index"`
+	Claimed    bool  `json:"claimed"`
+}
+
+// AdminAPIConfig holds API configuration from /admin/v1/config
+type AdminAPIConfig struct {
+	PublicURL      string `json:"public_url"`
+	PoCCallbackURL string `json:"poc_callback_url"`
+}
+
+// AdminUpgradePlan holds upcoming chain upgrade info
+type AdminUpgradePlan struct {
+	Name   string `json:"name"`
+	Height int64  `json:"height"`
+}
+
+// AdminChainNode holds chain node connection config
+type AdminChainNode struct {
+	SeedAPIURL string `json:"seed_api_url"`
 }
 
 // AdminNodeConfig represents a node entry from /admin/v1/config
@@ -221,15 +273,43 @@ type TendermintNetInfo struct {
 	} `json:"result"`
 }
 
-// AdminMLNode represents an MLNode from the admin API
-type AdminMLNode struct {
-	ID            string   `json:"id"`
-	Host          string   `json:"host"`
-	InferencePort int      `json:"inference_port"`
-	PoCPort       int      `json:"poc_port"`
-	MaxConcurrent int      `json:"max_concurrent"`
-	Models        []string `json:"models"`
-	Enabled       bool     `json:"enabled"`
+// AdminNodesEntry represents one entry from /admin/v1/nodes (nested structure)
+type AdminNodesEntry struct {
+	Node  AdminNodesNodeInfo `json:"node"`
+	State AdminNodesState    `json:"state"`
+}
+
+// AdminNodesNodeInfo holds the static node config from /admin/v1/nodes
+type AdminNodesNodeInfo struct {
+	ID            string                      `json:"id"`
+	Host          string                      `json:"host"`
+	InferencePort int                         `json:"inference_port"`
+	PoCPort       int                         `json:"poc_port"`
+	MaxConcurrent int                         `json:"max_concurrent"`
+	Models        map[string]AdminModelConfig `json:"models"`
+	Hardware      []AdminHardware             `json:"hardware"`
+}
+
+// AdminNodesState holds runtime state from /admin/v1/nodes
+type AdminNodesState struct {
+	IntendedStatus    string `json:"intended_status"`
+	CurrentStatus     string `json:"current_status"`
+	PoCIntendedStatus string `json:"poc_intended_status"`
+	PoCCurrentStatus  string `json:"poc_current_status"`
+	FailureReason     string `json:"failure_reason"`
+	StatusTimestamp   string `json:"status_timestamp"`
+	AdminState        struct {
+		Enabled bool `json:"enabled"`
+		Epoch   int  `json:"epoch"`
+	} `json:"admin_state"`
+	EpochMLNodes map[string]EpochMLNodeInfo `json:"epoch_ml_nodes"`
+}
+
+// EpochMLNodeInfo holds per-model node allocation from epoch_ml_nodes
+type EpochMLNodeInfo struct {
+	NodeID             string `json:"node_id"`
+	PoCWeight          int    `json:"poc_weight"`
+	TimeslotAllocation []bool `json:"timeslot_allocation"`
 }
 
 // StatusConfig holds the URLs for status endpoints.
@@ -336,10 +416,16 @@ func parseCheckDetails(status *NodeStatus, check SetupCheck) {
 	switch check.ID {
 	case "active_in_epoch":
 		parseEpochCheck(status, check.Details, passed)
+	case "validator_in_set":
+		status.Blockchain.IsValidator = passed
+		// Voting power equals epoch weight
+		if passed {
+			status.Blockchain.VotingPower = int64(status.Epoch.Weight)
+		}
 	case "block_sync":
 		parseBlockSyncCheck(status, check.Details, passed)
 	case "missed_requests_threshold":
-		parseMissedRequestsCheck(status, check.Details)
+		parseMissedRequestsCheck(status, check.Details, passed)
 	}
 
 	if strings.HasPrefix(check.ID, "mlnode_") {
@@ -383,21 +469,24 @@ func parseBlockSyncCheck(status *NodeStatus, details json.RawMessage, passed boo
 	status.Blockchain.CatchingUp = d.CatchingUp
 }
 
-func parseMissedRequestsCheck(status *NodeStatus, details json.RawMessage) {
+func parseMissedRequestsCheck(status *NodeStatus, details json.RawMessage, passed bool) {
 	var d struct {
 		MissedPercentage float64 `json:"missed_percentage"`
-		MissedCount      int     `json:"missed_count"`
-		TotalCount       int     `json:"total_count"`
+		MissedRequests   int     `json:"missed_requests"`
+		TotalRequests    int     `json:"total_requests"`
+		InferenceCount   int     `json:"inference_count"`
 	}
 	if json.Unmarshal(details, &d) != nil {
 		return
 	}
 	status.Epoch.MissPercentage = d.MissedPercentage
-	status.Epoch.MissedCount = d.MissedCount
-	status.Epoch.TotalCount = d.TotalCount
+	status.Epoch.MissedCount = d.MissedRequests
+	status.Epoch.TotalCount = d.TotalRequests
+	status.Epoch.InferenceCount = d.InferenceCount
+	status.Epoch.MissCheckPassed = passed
 	status.Blockchain.MissRate = d.MissedPercentage / 100
-	status.Blockchain.MissedBlocks = d.MissedCount
-	status.Blockchain.TotalBlocks = d.TotalCount
+	status.Blockchain.MissedBlocks = d.MissedRequests
+	status.Blockchain.TotalBlocks = d.TotalRequests
 }
 
 func parseMLNodeCheck(status *NodeStatus, details json.RawMessage, passed bool) {
@@ -450,12 +539,40 @@ func fetchAdminConfig(status *NodeStatus, cfg *StatusConfig) {
 		}
 	}
 
-	// Extract model/hardware from node config
+	// Node config: public URL, PoC callback, API version, seed API
+	status.NodeConfig.PublicURL = config.API.PublicURL
+	status.NodeConfig.PoCCallbackURL = config.API.PoCCallbackURL
+	status.NodeConfig.APIVersion = config.CurrentNodeVersion
+	status.NodeConfig.SeedAPIURL = config.ChainNode.SeedAPIURL
+
+	// Upgrade plan
+	if config.UpgradePlan.Name != "" {
+		status.NodeConfig.UpgradeName = config.UpgradePlan.Name
+		status.NodeConfig.UpgradeHeight = config.UpgradePlan.Height
+	}
+
+	// API processing lag
+	if config.CurrentHeight > 0 && config.LastProcessedHeight > 0 {
+		status.NodeConfig.HeightLag = config.CurrentHeight - config.LastProcessedHeight
+	}
+
+	// Reward claim status from seeds
+	if config.PreviousSeed != nil {
+		status.Epoch.PrevEpochClaimed = config.PreviousSeed.Claimed
+		status.Epoch.PrevEpochIndex = config.PreviousSeed.EpochIndex
+	}
+	if config.UpcomingSeed != nil {
+		status.Epoch.UpcomingEpoch = config.UpcomingSeed.EpochIndex
+	}
+
+	// Extract model/hardware from node config (supplementary — /admin/v1/nodes is authoritative)
 	if len(config.Nodes) > 0 {
 		node := config.Nodes[0]
-		status.MLNode.Enabled = node.Enabled
+		// Note: config nodes do NOT have an "enabled" field — don't set MLNode.Enabled here
 		for modelName, modelCfg := range node.Models {
-			status.MLNode.ModelName = modelName
+			if status.MLNode.ModelName == "" {
+				status.MLNode.ModelName = modelName
+			}
 			parseModelArgs(&status.MLNode, modelCfg.Args)
 		}
 		if len(node.Hardware) > 0 {
@@ -549,50 +666,77 @@ func fetchBlockchainStatus(status *NodeStatus, cfg *StatusConfig) {
 func fetchMLNodeStatus(status *NodeStatus, cfg *StatusConfig) {
 	client := &http.Client{Timeout: 5 * time.Second}
 
-	// Fetch from Admin API
+	// Fetch from Admin API (/admin/v1/nodes returns nested {node, state} entries)
 	resp, err := client.Get(cfg.AdminURL + "/admin/v1/nodes")
-	if err == nil && resp.StatusCode == 200 {
-		defer func() { _ = resp.Body.Close() }()
-		var nodes []AdminMLNode
-		if json.NewDecoder(resp.Body).Decode(&nodes) == nil && len(nodes) > 0 {
-			node := nodes[0]
-			status.MLNode.Enabled = node.Enabled
-			if len(node.Models) > 0 {
-				status.MLNode.ModelName = node.Models[0]
-			}
+	if err != nil {
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+
+	var entries []AdminNodesEntry
+	if json.NewDecoder(resp.Body).Decode(&entries) != nil || len(entries) == 0 {
+		return
+	}
+
+	entry := entries[0]
+	status.MLNode.Enabled = entry.State.AdminState.Enabled
+	status.MLNode.EnabledEpoch = entry.State.AdminState.Epoch
+
+	// Current vs intended status
+	status.MLNode.PoCStatus = entry.State.CurrentStatus
+	status.MLNode.IntendedStatus = entry.State.IntendedStatus
+	status.MLNode.PoCNodeStatus = entry.State.PoCCurrentStatus
+
+	// Status timestamp
+	if entry.State.StatusTimestamp != "" {
+		if t, err := time.Parse(time.RFC3339Nano, entry.State.StatusTimestamp); err == nil {
+			status.MLNode.StatusUpdated = t
 		}
 	}
 
-	// Check vLLM health
-	resp2, err := client.Get(cfg.VLLMHealthURL + "/v1/models")
-	if err == nil && resp2.StatusCode == 200 {
-		status.MLNode.ModelLoaded = true
-		_ = resp2.Body.Close()
+	// PoC weight and timeslot allocation from epoch_ml_nodes
+	for _, info := range entry.State.EpochMLNodes {
+		status.Epoch.PoCWeight = info.PoCWeight
+		status.Epoch.TimeslotAllocation = info.TimeslotAllocation
+		break // first model entry
+	}
+
+	// Model name from node config
+	for modelName, modelCfg := range entry.Node.Models {
+		if status.MLNode.ModelName == "" {
+			status.MLNode.ModelName = modelName
+		}
+		parseModelArgs(&status.MLNode, modelCfg.Args)
+	}
+
+	// Hardware
+	if len(entry.Node.Hardware) > 0 {
+		hw := entry.Node.Hardware[0]
+		status.MLNode.Hardware = fmt.Sprintf("%dx %s", hw.Count, hw.Type)
+		if status.MLNode.GPUCount == 0 {
+			status.MLNode.GPUCount = hw.Count
+			status.MLNode.GPUName = hw.Type
+		}
 	}
 }
 
 func fetchOverviewStatus(status *NodeStatus) {
-	// This would check docker containers
-	// For now, we infer from other status checks
-	containersRunning := 0
-
-	// If blockchain is accessible, node container is running
-	if status.Blockchain.BlockHeight > 0 {
-		containersRunning += 3 // node, tmkms, api
-	}
-
-	// If MLNode is accessible
-	if status.MLNode.ModelLoaded {
-		containersRunning++
-	}
-
-	status.Overview.ContainersRunning = containersRunning
-	status.Overview.ContainersTotal = 8 // Expected total (tmkms, node, api, bridge, proxy, explorer, mlnode, proxy-ssl optional)
-
-	// Node is registered if setup/report consensus_key_match passed, or has validator address
-	if status.Blockchain.ValidatorAddr != "" {
-		status.Overview.NodeRegistered = true
-		status.Overview.NodeAddress = status.Blockchain.ValidatorAddr
+	// Infer container health from setup/report checks
+	if status.SetupReport != nil {
+		confirmed := 1 // API is running (we got the report)
+		for _, check := range status.SetupReport.Checks {
+			switch {
+			case check.ID == "block_sync" && check.Status == StatusPass:
+				confirmed += 2 // node + tmkms
+			case strings.HasPrefix(check.ID, "mlnode_") && check.Status == StatusPass:
+				confirmed += 2 // mlnode + inference (nginx)
+			}
+		}
+		status.Overview.ContainersRunning = confirmed
+		status.Overview.ContainersTotal = 8
 	}
 }
 
@@ -628,26 +772,42 @@ func FetchMockedStatus() *NodeStatus {
 			LastBlockTime:  time.Now().Add(-6 * time.Second),
 		},
 		Epoch: EpochStatus{
-			EpochNumber:    427,
-			Active:         true,
-			Weight:         1000,
-			MissPercentage: 2.0,
-			MissedCount:    3,
-			TotalCount:     150,
+			EpochNumber:        427,
+			Active:             true,
+			Weight:             1000,
+			PoCWeight:          4200,
+			MissPercentage:     2.0,
+			MissedCount:        3,
+			TotalCount:         150,
+			InferenceCount:     147,
+			TimeslotAllocation: []bool{true, true},
+			PrevEpochClaimed:   true,
+			PrevEpochIndex:     426,
+			UpcomingEpoch:      428,
 		},
 		MLNode: MLNodeStatus{
-			Enabled:     true,
-			ModelName:   "Qwen/QwQ-32B",
-			ModelLoaded: true,
-			GPUCount:    4,
-			GPUName:     "NVIDIA GeForce RTX 4090",
-			TPSize:      4,
-			PPSize:      1,
-			MemoryUtil:  0.92,
-			MaxModelLen: 32768,
-			PoCStatus:   "Participating",
-			LastPoCTime: time.Now().Add(-2 * time.Minute),
-			LastPoCOK:   true,
+			Enabled:        true,
+			EnabledEpoch:   420,
+			ModelName:      "Qwen/QwQ-32B",
+			ModelLoaded:    true,
+			GPUCount:       4,
+			GPUName:        "NVIDIA GeForce RTX 4090",
+			TPSize:         4,
+			PPSize:         1,
+			MemoryUtil:     0.92,
+			MaxModelLen:    32768,
+			PoCStatus:      "INFERENCE",
+			IntendedStatus: "INFERENCE",
+			PoCNodeStatus:  "IDLE",
+			LastPoCTime:    time.Now().Add(-2 * time.Minute),
+			LastPoCOK:      true,
+			StatusUpdated:  time.Now().Add(-30 * time.Second),
+		},
+		NodeConfig: NodeConfigStatus{
+			PublicURL:      "http://my-node.example.com:8000",
+			PoCCallbackURL: "http://api:9100",
+			APIVersion:     "v3.0.8",
+			SeedAPIURL:     "http://89.169.111.79:8000",
 		},
 		Security: SecurityStatus{
 			FirewallConfigured: true,
