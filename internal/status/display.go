@@ -221,35 +221,43 @@ func printMLNode(s *NodeStatus) {
 		printFail("Model: None configured")
 	}
 
-	// GPUs
+	printMLNodeHardware(s)
+	printMLNodeConfig(s)
+	printMLNodePoCStatus(s)
+	printMLNodeFreshness(s)
+}
+
+func printMLNodeHardware(s *NodeStatus) {
 	if s.MLNode.Hardware != "" {
 		printInfo("Hardware", "%s", s.MLNode.Hardware)
 	} else if s.MLNode.GPUCount > 0 {
 		printInfo("GPUs", "%dx %s", s.MLNode.GPUCount, s.MLNode.GPUName)
 	}
 
-	// GPU details from setup/report
 	for _, gpu := range s.MLNode.GPUs {
 		printInfo("GPU", "%s (VRAM: %.0f/%.0fGB, Util: %d%%, Temp: %dC)",
 			gpu.Name, gpu.UsedMemoryGB, gpu.TotalMemoryGB, gpu.UtilizationPct, gpu.TemperatureC)
 	}
+}
 
-	// TP/PP configuration
-	if s.MLNode.TPSize > 0 {
-		configStr := fmt.Sprintf("TP=%d", s.MLNode.TPSize)
-		if s.MLNode.PPSize > 0 {
-			configStr += fmt.Sprintf(" PP=%d", s.MLNode.PPSize)
-		}
-		if s.MLNode.MemoryUtil > 0 {
-			configStr += fmt.Sprintf(" MemUtil=%.2f", s.MLNode.MemoryUtil)
-		}
-		if s.MLNode.MaxModelLen > 0 {
-			configStr += fmt.Sprintf(" MaxLen=%d", s.MLNode.MaxModelLen)
-		}
-		printInfo("Config", "%s", configStr)
+func printMLNodeConfig(s *NodeStatus) {
+	if s.MLNode.TPSize == 0 {
+		return
 	}
+	configStr := fmt.Sprintf("TP=%d", s.MLNode.TPSize)
+	if s.MLNode.PPSize > 0 {
+		configStr += fmt.Sprintf(" PP=%d", s.MLNode.PPSize)
+	}
+	if s.MLNode.MemoryUtil > 0 {
+		configStr += fmt.Sprintf(" MemUtil=%.2f", s.MLNode.MemoryUtil)
+	}
+	if s.MLNode.MaxModelLen > 0 {
+		configStr += fmt.Sprintf(" MaxLen=%d", s.MLNode.MaxModelLen)
+	}
+	printInfo("Config", "%s", configStr)
+}
 
-	// PoC Status (from /admin/v1/nodes state.current_status)
+func printMLNodePoCStatus(s *NodeStatus) {
 	switch s.MLNode.PoCStatus {
 	case "INFERENCE":
 		printOK("Status: Serving inference")
@@ -263,18 +271,17 @@ func printMLNode(s *NodeStatus) {
 		printInfo("Status", "%s", s.MLNode.PoCStatus)
 	}
 
-	// Status mismatch detection (intended != current = transitioning or stuck)
 	if s.MLNode.IntendedStatus != "" && s.MLNode.PoCStatus != "" &&
 		s.MLNode.IntendedStatus != s.MLNode.PoCStatus {
 		printWarn("Status mismatch: intended=%s current=%s (transitioning)", s.MLNode.IntendedStatus, s.MLNode.PoCStatus)
 	}
 
-	// PoC subsystem status
 	if s.MLNode.PoCNodeStatus != "" && s.MLNode.PoCNodeStatus != "IDLE" {
 		printInfo("PoC subsystem", "%s", s.MLNode.PoCNodeStatus)
 	}
+}
 
-	// Status freshness
+func printMLNodeFreshness(s *NodeStatus) {
 	if !s.MLNode.StatusUpdated.IsZero() {
 		ago := time.Since(s.MLNode.StatusUpdated)
 		if ago > 10*time.Minute {
@@ -284,7 +291,6 @@ func printMLNode(s *NodeStatus) {
 		}
 	}
 
-	// Last PoC
 	if !s.MLNode.LastPoCTime.IsZero() {
 		ago := formatDuration(time.Since(s.MLNode.LastPoCTime))
 		if s.MLNode.LastPoCOK {

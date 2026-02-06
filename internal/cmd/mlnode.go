@@ -13,6 +13,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const (
+	notAvailable  = "N/A"
+	defaultNodeID = "node1"
+)
+
 var adminURL string
 
 func init() {
@@ -86,7 +91,7 @@ func runMLNodeList(_ *cobra.Command, _ []string) error {
 		}
 
 		// Hardware
-		hw := "N/A"
+		hw := notAvailable
 		if len(e.Node.Hardware) > 0 {
 			hw = fmt.Sprintf("%dx %s", e.Node.Hardware[0].Count, e.Node.Hardware[0].Type)
 		}
@@ -144,7 +149,7 @@ func runMLNodeStatus(_ *cobra.Command, args []string) error {
 		return nil
 	}
 
-	nodeID := "node1"
+	nodeID := defaultNodeID
 	if len(args) > 0 {
 		nodeID = args[0]
 	}
@@ -170,7 +175,7 @@ func runMLNodeStatus(_ *cobra.Command, args []string) error {
 }
 
 func runMLNodeEnable(_ *cobra.Command, args []string) error {
-	nodeID := "node1"
+	nodeID := defaultNodeID
 	if len(args) > 0 {
 		nodeID = args[0]
 	}
@@ -179,12 +184,12 @@ func runMLNodeEnable(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to enable node %q: %w", nodeID, err)
 	}
 
-	color.New(color.FgGreen).Printf("Node %q enabled successfully.\n", nodeID)
+	_, _ = color.New(color.FgGreen).Printf("Node %q enabled successfully.\n", nodeID)
 	return nil
 }
 
 func runMLNodeDisable(_ *cobra.Command, args []string) error {
-	nodeID := "node1"
+	nodeID := defaultNodeID
 	if len(args) > 0 {
 		nodeID = args[0]
 	}
@@ -193,7 +198,7 @@ func runMLNodeDisable(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to disable node %q: %w", nodeID, err)
 	}
 
-	color.New(color.FgYellow).Printf("Node %q disabled successfully.\n", nodeID)
+	_, _ = color.New(color.FgYellow).Printf("Node %q disabled successfully.\n", nodeID)
 	return nil
 }
 
@@ -210,7 +215,7 @@ func fetchAdminNodes(baseURL string) ([]status.AdminNodesEntry, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Admin API returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("admin API returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var entries []status.AdminNodesEntry
@@ -233,7 +238,7 @@ func postAdminAction(baseURL, nodeID, action string) error {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Admin API returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return fmt.Errorf("admin API returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	return nil
@@ -243,15 +248,12 @@ func firstModelName(models map[string]status.AdminModelConfig) string {
 	for name := range models {
 		return name
 	}
-	return "N/A"
+	return notAvailable
 }
 
 func printNodeDetail(e *status.AdminNodesEntry) {
 	boldC := color.New(color.Bold)
 	dimC := color.New(color.Faint)
-	greenC := color.New(color.FgGreen)
-	yellowC := color.New(color.FgYellow)
-	redC := color.New(color.FgRed)
 
 	_, _ = boldC.Printf("\nML Node: %s\n", e.Node.ID)
 	_, _ = dimC.Println(strings.Repeat("─", 40))
@@ -262,17 +264,37 @@ func printNodeDetail(e *status.AdminNodesEntry) {
 	fmt.Printf("  PoC Port:       %d\n", e.Node.PoCPort)
 	fmt.Printf("  Max Concurrent: %d\n", e.Node.MaxConcurrent)
 
-	// Status
 	fmt.Println()
+	printNodeState(e)
+	printNodeTimestamp(e)
+
+	// Model
+	fmt.Println()
+	for name, cfg := range e.Node.Models {
+		_, _ = boldC.Printf("  Model: %s\n", name)
+		if len(cfg.Args) > 0 {
+			_, _ = dimC.Printf("    Args: %s\n", strings.Join(cfg.Args, " "))
+		}
+	}
+
+	printNodeHardware(e)
+	printNodeEpochAllocation(e)
+	fmt.Println()
+}
+
+func printNodeState(e *status.AdminNodesEntry) {
+	greenC := color.New(color.FgGreen)
+	yellowC := color.New(color.FgYellow)
+	redC := color.New(color.FgRed)
+	dimC := color.New(color.Faint)
+
 	currentStr := e.State.CurrentStatus
 	if currentStr == "" {
 		currentStr = "UNKNOWN"
 	}
 	fmt.Print("  Status:         ")
 	switch currentStr {
-	case "INFERENCE":
-		_, _ = greenC.Println(currentStr)
-	case "POC":
+	case "INFERENCE", "POC":
 		_, _ = greenC.Println(currentStr)
 	case "FAILED":
 		_, _ = redC.Println(currentStr)
@@ -280,11 +302,9 @@ func printNodeDetail(e *status.AdminNodesEntry) {
 		_, _ = yellowC.Println(currentStr)
 	}
 
-	// Intended vs current mismatch
 	if e.State.IntendedStatus != "" && e.State.IntendedStatus != e.State.CurrentStatus {
 		_, _ = yellowC.Printf("  Intended:       %s (transitioning)\n", e.State.IntendedStatus)
 	}
-
 	if e.State.PoCCurrentStatus != "" {
 		fmt.Printf("  PoC Status:     %s\n", e.State.PoCCurrentStatus)
 	}
@@ -308,57 +328,55 @@ func printNodeDetail(e *status.AdminNodesEntry) {
 		fmt.Print("  Failure:        ")
 		_, _ = redC.Println(e.State.FailureReason)
 	}
+}
 
-	// Status timestamp
-	if e.State.StatusTimestamp != "" {
-		if t, err := time.Parse(time.RFC3339Nano, e.State.StatusTimestamp); err == nil {
-			ago := time.Since(t)
-			agoStr := formatStatusAge(ago)
-			if ago > 10*time.Minute {
-				_, _ = yellowC.Printf("  Last Updated:   %s (stale)\n", agoStr)
-			} else {
-				_, _ = dimC.Printf("  Last Updated:   %s\n", agoStr)
-			}
-		}
+func printNodeTimestamp(e *status.AdminNodesEntry) {
+	if e.State.StatusTimestamp == "" {
+		return
 	}
+	t, err := time.Parse(time.RFC3339Nano, e.State.StatusTimestamp)
+	if err != nil {
+		return
+	}
+	ago := time.Since(t)
+	agoStr := formatStatusAge(ago)
+	if ago > 10*time.Minute {
+		_, _ = color.New(color.FgYellow).Printf("  Last Updated:   %s (stale)\n", agoStr)
+	} else {
+		_, _ = color.New(color.Faint).Printf("  Last Updated:   %s\n", agoStr)
+	}
+}
 
-	// Model
+func printNodeHardware(e *status.AdminNodesEntry) {
+	if len(e.Node.Hardware) == 0 {
+		return
+	}
 	fmt.Println()
-	for name, cfg := range e.Node.Models {
-		_, _ = boldC.Printf("  Model: %s\n", name)
-		if len(cfg.Args) > 0 {
-			_, _ = dimC.Printf("    Args: %s\n", strings.Join(cfg.Args, " "))
-		}
+	for _, hw := range e.Node.Hardware {
+		fmt.Printf("  Hardware: %dx %s\n", hw.Count, hw.Type)
 	}
+}
 
-	// Hardware
-	if len(e.Node.Hardware) > 0 {
-		fmt.Println()
-		for _, hw := range e.Node.Hardware {
-			fmt.Printf("  Hardware: %dx %s\n", hw.Count, hw.Type)
-		}
+func printNodeEpochAllocation(e *status.AdminNodesEntry) {
+	if len(e.State.EpochMLNodes) == 0 {
+		return
 	}
-
-	// Epoch allocation (from epoch_ml_nodes)
-	if len(e.State.EpochMLNodes) > 0 {
-		fmt.Println()
-		_, _ = boldC.Println("  Epoch Allocation")
-		for model, info := range e.State.EpochMLNodes {
-			fmt.Printf("    Model:     %s\n", model)
-			fmt.Printf("    PoC Weight: %d\n", info.PoCWeight)
-			if len(info.TimeslotAllocation) > 0 {
-				allocated := 0
-				for _, s := range info.TimeslotAllocation {
-					if s {
-						allocated++
-					}
+	boldC := color.New(color.Bold)
+	fmt.Println()
+	_, _ = boldC.Println("  Epoch Allocation")
+	for model, info := range e.State.EpochMLNodes {
+		fmt.Printf("    Model:     %s\n", model)
+		fmt.Printf("    PoC Weight: %d\n", info.PoCWeight)
+		if len(info.TimeslotAllocation) > 0 {
+			allocated := 0
+			for _, s := range info.TimeslotAllocation {
+				if s {
+					allocated++
 				}
-				fmt.Printf("    Timeslots: %d/%d allocated\n", allocated, len(info.TimeslotAllocation))
 			}
+			fmt.Printf("    Timeslots: %d/%d allocated\n", allocated, len(info.TimeslotAllocation))
 		}
 	}
-
-	fmt.Println()
 }
 
 func formatStatusAge(d time.Duration) string {

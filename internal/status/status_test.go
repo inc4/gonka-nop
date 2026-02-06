@@ -590,7 +590,13 @@ func TestFetchAdminConfig(t *testing.T) {
 		t.Errorf("BlockLag = %d, want 100", status.Blockchain.BlockLag)
 	}
 
-	// ML Node config
+	checkAdminConfigMLNode(t, status)
+	checkAdminConfigNodeConfig(t, status)
+	checkAdminConfigSeeds(t, status)
+}
+
+func checkAdminConfigMLNode(t *testing.T, status *NodeStatus) {
+	t.Helper()
 	if status.MLNode.ModelName != "Qwen/QwQ-32B" {
 		t.Errorf("ModelName = %q, want Qwen/QwQ-32B", status.MLNode.ModelName)
 	}
@@ -606,8 +612,10 @@ func TestFetchAdminConfig(t *testing.T) {
 	if status.MLNode.Hardware != "4x NVIDIA GeForce RTX 4090 | 24GB" {
 		t.Errorf("Hardware = %q, unexpected", status.MLNode.Hardware)
 	}
+}
 
-	// New fields: node config
+func checkAdminConfigNodeConfig(t *testing.T, status *NodeStatus) {
+	t.Helper()
 	if status.NodeConfig.PublicURL != "http://my-node.example.com:8000" {
 		t.Errorf("PublicURL = %q, unexpected", status.NodeConfig.PublicURL)
 	}
@@ -629,8 +637,10 @@ func TestFetchAdminConfig(t *testing.T) {
 	if status.NodeConfig.HeightLag != 2 {
 		t.Errorf("HeightLag = %d, want 2", status.NodeConfig.HeightLag)
 	}
+}
 
-	// Reward claim status
+func checkAdminConfigSeeds(t *testing.T, status *NodeStatus) {
+	t.Helper()
 	if !status.Epoch.PrevEpochClaimed {
 		t.Error("PrevEpochClaimed should be true")
 	}

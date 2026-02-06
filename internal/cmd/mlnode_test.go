@@ -9,6 +9,14 @@ import (
 	"github.com/inc4/gonka-nop/internal/status"
 )
 
+const (
+	testNodeID1       = "node1"
+	testNodeID2       = "node2"
+	testStatusInfer   = "INFERENCE"
+	testStatusFailed  = "FAILED"
+	testModelNameNone = notAvailable
+)
+
 func newTestAdminServer(t *testing.T, entries []status.AdminNodesEntry) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -119,22 +127,27 @@ func TestFetchAdminNodes(t *testing.T) {
 		t.Fatalf("got %d entries, want 2", len(got))
 	}
 
-	if got[0].Node.ID != "node1" {
-		t.Errorf("entry[0].Node.ID = %q, want %q", got[0].Node.ID, "node1")
+	if got[0].Node.ID != testNodeID1 {
+		t.Errorf("entry[0].Node.ID = %q, want %q", got[0].Node.ID, testNodeID1)
 	}
-	if got[1].Node.ID != "node2" {
-		t.Errorf("entry[1].Node.ID = %q, want %q", got[1].Node.ID, "node2")
+	if got[1].Node.ID != testNodeID2 {
+		t.Errorf("entry[1].Node.ID = %q, want %q", got[1].Node.ID, testNodeID2)
 	}
-	if got[0].State.CurrentStatus != "INFERENCE" {
-		t.Errorf("entry[0] status = %q, want INFERENCE", got[0].State.CurrentStatus)
+	if got[0].State.CurrentStatus != testStatusInfer {
+		t.Errorf("entry[0] status = %q, want %s", got[0].State.CurrentStatus, testStatusInfer)
 	}
 	if got[1].State.FailureReason != "OOM during model load" {
 		t.Errorf("entry[1] failure = %q, want OOM message", got[1].State.FailureReason)
 	}
 
-	// New fields
-	if got[0].State.IntendedStatus != "INFERENCE" {
-		t.Errorf("entry[0] intended = %q, want INFERENCE", got[0].State.IntendedStatus)
+	checkFetchAdminNodesExtended(t, got)
+}
+
+func checkFetchAdminNodesExtended(t *testing.T, got []status.AdminNodesEntry) {
+	t.Helper()
+
+	if got[0].State.IntendedStatus != testStatusInfer {
+		t.Errorf("entry[0] intended = %q, want %s", got[0].State.IntendedStatus, testStatusInfer)
 	}
 	if got[0].State.AdminState.Epoch != 67 {
 		t.Errorf("entry[0] enabled epoch = %d, want 67", got[0].State.AdminState.Epoch)
@@ -151,7 +164,7 @@ func TestFetchAdminNodes(t *testing.T) {
 	}
 
 	// Status mismatch on node2 (intended=INFERENCE, current=FAILED)
-	if got[1].State.IntendedStatus != "INFERENCE" || got[1].State.CurrentStatus != "FAILED" {
+	if got[1].State.IntendedStatus != testStatusInfer || got[1].State.CurrentStatus != testStatusFailed {
 		t.Errorf("entry[1] status mismatch not detected: intended=%q current=%q",
 			got[1].State.IntendedStatus, got[1].State.CurrentStatus)
 	}
@@ -194,7 +207,7 @@ func TestPostAdminAction_Enable(t *testing.T) {
 	ts := newTestAdminServer(t, nil)
 	defer ts.Close()
 
-	err := postAdminAction(ts.URL, "node1", "enable")
+	err := postAdminAction(ts.URL, testNodeID1, "enable")
 	if err != nil {
 		t.Fatalf("postAdminAction(enable) error: %v", err)
 	}
@@ -204,7 +217,7 @@ func TestPostAdminAction_Disable(t *testing.T) {
 	ts := newTestAdminServer(t, nil)
 	defer ts.Close()
 
-	err := postAdminAction(ts.URL, "node1", "disable")
+	err := postAdminAction(ts.URL, testNodeID1, "disable")
 	if err != nil {
 		t.Fatalf("postAdminAction(disable) error: %v", err)
 	}
@@ -221,7 +234,7 @@ func TestPostAdminAction_Error(t *testing.T) {
 }
 
 func TestPostAdminAction_APIDown(t *testing.T) {
-	err := postAdminAction("http://127.0.0.1:1", "node1", "enable")
+	err := postAdminAction("http://127.0.0.1:1", testNodeID1, "enable")
 	if err == nil {
 		t.Fatal("postAdminAction() should error when API is down")
 	}
@@ -239,8 +252,8 @@ func TestFirstModelName(t *testing.T) {
 
 func TestFirstModelName_Empty(t *testing.T) {
 	name := firstModelName(map[string]status.AdminModelConfig{})
-	if name != "N/A" {
-		t.Errorf("firstModelName() = %q, want N/A", name)
+	if name != testModelNameNone {
+		t.Errorf("firstModelName() = %q, want %s", name, testModelNameNone)
 	}
 }
 

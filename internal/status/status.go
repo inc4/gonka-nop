@@ -556,7 +556,11 @@ func fetchAdminConfig(status *NodeStatus, cfg *StatusConfig) {
 		status.NodeConfig.HeightLag = config.CurrentHeight - config.LastProcessedHeight
 	}
 
-	// Reward claim status from seeds
+	applyConfigSeeds(status, &config)
+	applyConfigNodes(status, &config)
+}
+
+func applyConfigSeeds(status *NodeStatus, config *AdminConfig) {
 	if config.PreviousSeed != nil {
 		status.Epoch.PrevEpochClaimed = config.PreviousSeed.Claimed
 		status.Epoch.PrevEpochIndex = config.PreviousSeed.EpochIndex
@@ -564,24 +568,26 @@ func fetchAdminConfig(status *NodeStatus, cfg *StatusConfig) {
 	if config.UpcomingSeed != nil {
 		status.Epoch.UpcomingEpoch = config.UpcomingSeed.EpochIndex
 	}
+}
 
-	// Extract model/hardware from node config (supplementary — /admin/v1/nodes is authoritative)
-	if len(config.Nodes) > 0 {
-		node := config.Nodes[0]
-		// Note: config nodes do NOT have an "enabled" field — don't set MLNode.Enabled here
-		for modelName, modelCfg := range node.Models {
-			if status.MLNode.ModelName == "" {
-				status.MLNode.ModelName = modelName
-			}
-			parseModelArgs(&status.MLNode, modelCfg.Args)
+func applyConfigNodes(status *NodeStatus, config *AdminConfig) {
+	if len(config.Nodes) == 0 {
+		return
+	}
+	node := config.Nodes[0]
+	// Note: config nodes do NOT have an "enabled" field — don't set MLNode.Enabled here
+	for modelName, modelCfg := range node.Models {
+		if status.MLNode.ModelName == "" {
+			status.MLNode.ModelName = modelName
 		}
-		if len(node.Hardware) > 0 {
-			hw := node.Hardware[0]
-			status.MLNode.Hardware = fmt.Sprintf("%dx %s", hw.Count, hw.Type)
-			if status.MLNode.GPUCount == 0 {
-				status.MLNode.GPUCount = hw.Count
-				status.MLNode.GPUName = hw.Type
-			}
+		parseModelArgs(&status.MLNode, modelCfg.Args)
+	}
+	if len(node.Hardware) > 0 {
+		hw := node.Hardware[0]
+		status.MLNode.Hardware = fmt.Sprintf("%dx %s", hw.Count, hw.Type)
+		if status.MLNode.GPUCount == 0 {
+			status.MLNode.GPUCount = hw.Count
+			status.MLNode.GPUName = hw.Type
 		}
 	}
 }
