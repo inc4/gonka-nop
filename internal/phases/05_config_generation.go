@@ -16,6 +16,7 @@ const (
 	defaultAttentionBackend = "FLASH_ATTN"
 	defaultMLNodeImageTag   = "3.0.12"
 	kvCacheDtypeAuto        = "auto"
+	defaultHFHome           = "/mnt/shared/huggingface"
 )
 
 // ConfigGeneration generates configuration files
@@ -51,7 +52,6 @@ func (p *ConfigGeneration) Run(_ context.Context, state *config.State) error {
 	}
 
 	// Get HuggingFace home directory
-	defaultHFHome := "/mnt/shared/huggingface"
 	hfHome, err := ui.Input("HuggingFace cache directory:", defaultHFHome)
 	if err != nil {
 		return err
@@ -677,7 +677,7 @@ func generateMLNodeCompose(state *config.State) error {
 
 	hfHome := state.HFHome
 	if hfHome == "" {
-		hfHome = "/mnt/shared/huggingface"
+		hfHome = defaultHFHome
 	}
 
 	content := fmt.Sprintf(`# Gonka ML Node Docker Compose

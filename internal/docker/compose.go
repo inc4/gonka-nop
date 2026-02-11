@@ -162,6 +162,15 @@ func (c *ComposeClient) Ps(ctx context.Context) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
+// Run executes a one-off command in a service container.
+// Equivalent to: docker compose run --rm --no-deps <service> <command...>
+func (c *ComposeClient) Run(ctx context.Context, service string, command ...string) error {
+	args := make([]string, 0, 4+len(command))
+	args = append(args, "run", "--rm", "--no-deps", service)
+	args = append(args, command...)
+	return c.run(ctx, args...)
+}
+
 // DetectSudo checks if docker needs sudo by running `docker info`.
 func DetectSudo(ctx context.Context) bool {
 	cmd := exec.CommandContext(ctx, "docker", "info")

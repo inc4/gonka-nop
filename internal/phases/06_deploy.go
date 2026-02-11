@@ -3,6 +3,7 @@ package phases
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"time"
 
@@ -74,6 +75,9 @@ func (p *Deploy) Run(ctx context.Context, state *config.State) error {
 		ui.Warn("TMKMS chain ID fix failed: %v", err)
 	}
 	if err := p.monitorSync(ctx, state); err != nil {
+		return err
+	}
+	if err := p.preDownloadModel(ctx, state); err != nil {
 		return err
 	}
 	if err := p.startMLNode(ctx, state); err != nil {
@@ -214,6 +218,49 @@ func (p *Deploy) monitorSync(ctx context.Context, state *config.State) error {
 		ui.Detail("Block height: %s", formatBlockHeight(int(finalStatus.LatestBlockHeight)))
 	}
 
+	return nil
+}
+
+func (p *Deploy) preDownloadModel(ctx context.Context, state *config.State) error {
+	modelName := state.SelectedModel
+	if modelName == "" {
+		modelName = defaultModel
+	}
+
+	hfHome := state.HFHome
+	if hfHome == "" {
+		hfHome = defaultHFHome
+	}
+
+	ui.Header("Model Download")
+	ui.Info("Pre-downloading model %s to %s", modelName, hfHome)
+	ui.Detail("If already cached, this completes instantly")
+
+	client, err := docker.NewComposeClient(state)
+	if err != nil {
+		return fmt.Errorf("create compose client: %w", err)
+	}
+
+	// Stream output so user sees download progress
+	client.Stdout = os.Stdout
+	client.Stderr = os.Stderr
+
+	dlErr := client.Run(ctx, "mlnode-308", "huggingface-cli", "download", modelName)
+	if dlErr != nil {
+		ui.Warn("Model pre-download failed: %v", dlErr)
+		ui.Detail("The ML node will attempt to download the model at startup")
+
+		proceed, promptErr := ui.Confirm("Continue without pre-download?", true)
+		if promptErr != nil {
+			return promptErr
+		}
+		if !proceed {
+			return fmt.Errorf("model download: %w", dlErr)
+		}
+		return nil
+	}
+
+	ui.Success("Model %s cached in %s", modelName, hfHome)
 	return nil
 }
 

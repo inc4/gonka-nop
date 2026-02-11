@@ -13,7 +13,6 @@ import (
 const (
 	testIP             = "10.0.0.1"
 	testBeaconStateURL = "https://beaconstate.info/"
-	testDefaultHFHome  = "/mnt/shared/huggingface"
 )
 
 func TestBuildVLLMArgs(t *testing.T) {
@@ -509,7 +508,7 @@ func TestGenerateMLNodeCompose(t *testing.T) {
 	state.SelectedModel = "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
 	state.MLNodeImageTag = mlnodeBlackwellTag
 	state.AttentionBackend = "FLASHINFER"
-	state.HFHome = testDefaultHFHome
+	state.HFHome = defaultHFHome
 
 	if err := generateMLNodeCompose(state); err != nil {
 		t.Fatalf("generateMLNodeCompose() error: %v", err)
@@ -529,8 +528,8 @@ func TestGenerateMLNodeCompose(t *testing.T) {
 		{"mlnode-308 container name", "container_name: mlnode-308"},
 		{"MLNode image tag", "mlnode:" + mlnodeBlackwellTag},
 		{"Attention backend", "VLLM_ATTENTION_BACKEND=FLASHINFER"},
-		{"HF_HOME env", "HF_HOME=" + testDefaultHFHome},
-		{"HF_HOME volume", testDefaultHFHome + ":" + testDefaultHFHome},
+		{"HF_HOME env", "HF_HOME=" + defaultHFHome},
+		{"HF_HOME volume", defaultHFHome + ":" + defaultHFHome},
 		{"Model name", "MODEL_NAME=Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"},
 		{"GPU reservation", "driver: nvidia"},
 		{"node-config volume", "node-config.json"},
