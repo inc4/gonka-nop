@@ -3,10 +3,24 @@ package phases
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"time"
 
 	"github.com/inc4/gonka-nop/internal/config"
+	"github.com/inc4/gonka-nop/internal/docker"
 	"github.com/inc4/gonka-nop/internal/ui"
+)
+
+const (
+	defaultAdminURL   = "http://localhost:9200"
+	defaultRPCURL     = "http://localhost:26657"
+	syncTimeout       = 30 * time.Minute
+	syncPollInterval  = 5 * time.Second
+	modelLoadTimeout  = 15 * time.Minute
+	modelPollInterval = 10 * time.Second
+	cmdSudo           = "sudo"
+	cmdDocker         = "docker"
 )
 
 // Deploy starts the Docker containers with security hardening
@@ -28,7 +42,14 @@ func (p *Deploy) ShouldRun(state *config.State) bool {
 	return !state.IsPhaseComplete(p.Name())
 }
 
-func (p *Deploy) Run(_ context.Context, state *config.State) error {
+func (p *Deploy) Run(ctx context.Context, state *config.State) error {
+	// Sudo was already detected in Phase 1 (Prerequisites).
+	// Re-detect only if prerequisites was skipped (e.g., resumed run).
+	if !state.UseSudo && docker.DetectSudo(ctx) {
+		state.UseSudo = true
+		ui.Info("Docker requires sudo — commands will use 'sudo -E'")
+	}
+
 	// Confirm deployment
 	confirm, err := ui.Confirm("Ready to start containers. Proceed?", true)
 	if err != nil {
@@ -41,22 +62,28 @@ func (p *Deploy) Run(_ context.Context, state *config.State) error {
 
 	ui.Info("Starting deployment from: %s", state.OutputDir)
 
-	if err := p.configureFirewall(state); err != nil {
+	if err := p.configureFirewall(ctx, state); err != nil {
 		return err
 	}
-	if err := p.pullImages(state); err != nil {
+	if err := p.pullImages(ctx, state); err != nil {
 		return err
 	}
-	if err := p.startNetworkNode(); err != nil {
+	if err := p.startNetworkNode(ctx, state); err != nil {
 		return err
 	}
-	if err := p.monitorSync(); err != nil {
+	if err := p.fixTMKMSChainID(ctx, state); err != nil {
+		ui.Warn("TMKMS chain ID fix failed: %v", err)
+	}
+	if err := p.monitorSync(ctx, state); err != nil {
 		return err
 	}
-	if err := p.startMLNode(state); err != nil {
+	if err := p.preDownloadModel(ctx, state); err != nil {
 		return err
 	}
-	if err := p.runHealthChecks(state); err != nil {
+	if err := p.startMLNode(ctx, state); err != nil {
+		return err
+	}
+	if err := p.runHealthChecks(ctx, state); err != nil {
 		return err
 	}
 
@@ -64,171 +91,342 @@ func (p *Deploy) Run(_ context.Context, state *config.State) error {
 	return nil
 }
 
-func (p *Deploy) configureFirewall(state *config.State) error {
-	err := ui.WithSpinner("Configuring DOCKER-USER iptables chain", func() error {
-		time.Sleep(600 * time.Millisecond)
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	state.FirewallConfigured = true
-	ui.Success("DOCKER-USER chain configured (UFW bypass protection)")
-	ui.Detail("Internal ports (9100, 9200, 5050, 8080) blocked from external access")
-	ui.Detail("P2P (5000) and RPC (26657) remain publicly accessible")
+func (p *Deploy) configureFirewall(_ context.Context, state *config.State) error {
+	// Real iptables configuration is deferred to M5.2.
+	// For now, warn the user and verify port bindings in compose.
+	ui.Warn("Firewall configuration (DOCKER-USER iptables) is not yet automated")
+	ui.Detail("Ensure internal ports (5050, 8080, 9100, 9200) are bound to 127.0.0.1 in docker-compose.yml")
+	ui.Detail("Refer to: gonka-nop setup --help for manual iptables guidance")
 
+	state.FirewallConfigured = false
 	state.DDoSProtection = true
-	ui.Success("DDoS protection enabled via proxy configuration")
-	ui.Detail("Blocked routes: /cosmos/*, /nop/*")
-	ui.Detail("Chain API disabled, Chain GRPC disabled, Chain RPC enabled (read-only)")
+	ui.Info("DDoS protection will be enabled via proxy configuration (GONKA_API_BLOCKED_ROUTES)")
 	return nil
 }
 
-func (p *Deploy) pullImages(state *config.State) error {
-	err := ui.WithSpinner("Pulling container images", func() error {
-		time.Sleep(2 * time.Second)
-		return nil
-	})
+func (p *Deploy) pullImages(ctx context.Context, state *config.State) error {
+	client, err := docker.NewComposeClient(state)
 	if err != nil {
-		return err
-	}
-	ui.Detail("Images pulled: tmkms, node, api, bridge, proxy, explorer")
-
-	mlImage := fmt.Sprintf("ghcr.io/product-science/mlnode:%s", state.MLNodeImageTag)
-	if state.MLNodeImageTag == "" {
-		mlImage = "ghcr.io/product-science/mlnode:3.0.12"
-	}
-	err = ui.WithSpinner(fmt.Sprintf("Pulling ML node image (%s)", mlImage), func() error {
-		time.Sleep(1500 * time.Millisecond)
-		return nil
-	})
-	if err != nil {
-		return err
+		return fmt.Errorf("create compose client: %w", err)
 	}
 
-	err = ui.WithSpinner("Checking IPv4/IPv6 resolution", func() error {
-		time.Sleep(400 * time.Millisecond)
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	ui.Success("IPv4 resolution OK (no IPv6 conflict for vLLM health endpoint)")
-	return nil
-}
+	sp := ui.NewSpinner("Pulling container images (this may take several minutes)...")
+	sp.Start()
 
-func (p *Deploy) startNetworkNode() error {
-	err := ui.WithSpinner("Starting network node services (docker compose up -d)", func() error {
-		time.Sleep(1500 * time.Millisecond)
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	ui.Detail("Started: tmkms, node, api, bridge, proxy, explorer")
-	return nil
-}
+	pullErr := client.Pull(ctx)
 
-func (p *Deploy) monitorSync() error {
-	ui.Header("Blockchain Sync")
-	err := ui.WithSpinner("Waiting for node to connect to peers", func() error {
-		time.Sleep(1 * time.Second)
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	ui.Detail("Connected to %d peers", 8)
+	if pullErr != nil {
+		sp.StopWithError("Failed to pull some images")
+		ui.Warn("Pull error: %v", pullErr)
+		ui.Detail("Some images may already be cached locally")
 
-	err = ui.WithSpinner("Waiting for state sync to initialize", func() error {
-		time.Sleep(1500 * time.Millisecond)
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	ui.Detail("State sync from snapshot — catching up")
-
-	syncSteps := []struct {
-		block int
-		lag   int
-	}{
-		{1200000, 50000},
-		{1230000, 20000},
-		{1245000, 5000},
-		{1249000, 1000},
-		{1249900, 100},
-	}
-	for _, step := range syncSteps {
-		err = ui.WithSpinner(fmt.Sprintf("Syncing... block %s (lag: %d blocks)",
-			formatBlockHeight(step.block), step.lag), func() error {
-			time.Sleep(500 * time.Millisecond)
-			return nil
-		})
-		if err != nil {
-			return err
+		proceed, promptErr := ui.Confirm("Continue with cached images?", true)
+		if promptErr != nil {
+			return promptErr
+		}
+		if !proceed {
+			return fmt.Errorf("pull images: %w", pullErr)
 		}
 	}
-	ui.Success("Blockchain synced to latest block 1,250,000")
+
+	sp.StopWithSuccess("Container images pulled")
 	return nil
 }
 
-func (p *Deploy) startMLNode(state *config.State) error {
-	ui.Header("ML Node")
-	err := ui.WithSpinner("Starting ML node with GPU (docker compose -f docker-compose.mlnode.yml up -d)", func() error {
-		time.Sleep(1500 * time.Millisecond)
-		return nil
-	})
+func (p *Deploy) startNetworkNode(ctx context.Context, state *config.State) error {
+	// Start core services using only the first compose file (network node)
+	coreClient, err := docker.NewComposeClient(state)
 	if err != nil {
-		return err
+		return fmt.Errorf("create compose client: %w", err)
 	}
 
+	// Use only the first compose file for core services
+	if len(coreClient.Files) > 0 {
+		coreClient.Files = coreClient.Files[:1]
+	}
+
+	sp := ui.NewSpinner("Starting network node services (docker compose up -d)...")
+	sp.Start()
+
+	upErr := coreClient.Up(ctx)
+
+	if upErr != nil {
+		sp.StopWithError("Failed to start network node")
+		return fmt.Errorf("start network node: %w", upErr)
+	}
+
+	sp.StopWithSuccess("Network node services started")
+	ui.Detail("Started: tmkms, node, api, bridge, proxy, explorer")
+
+	// Brief pause for containers to initialize
+	time.Sleep(5 * time.Second)
+
+	// Verify containers are running
+	ps, psErr := coreClient.Ps(ctx)
+	if psErr == nil && ps != "" {
+		ui.Detail("Running containers:\n%s", ps)
+	}
+
+	return nil
+}
+
+func (p *Deploy) monitorSync(ctx context.Context, state *config.State) error {
+	ui.Header("Blockchain Sync")
+
+	rpcURL := state.RPCURL
+	if rpcURL == "" {
+		rpcURL = defaultRPCURL
+	}
+
+	syncCtx, cancel := context.WithTimeout(ctx, syncTimeout)
+	defer cancel()
+
+	sp := ui.NewSpinner("Waiting for blockchain to sync...")
+	sp.Start()
+
+	err := docker.WaitForSync(syncCtx, rpcURL, syncPollInterval, func(s *docker.SyncStatus) {
+		if s.CatchingUp {
+			sp.UpdateMessage(fmt.Sprintf("Syncing... block %s (catching up)",
+				formatBlockHeight(int(s.LatestBlockHeight))))
+		} else {
+			sp.UpdateMessage(fmt.Sprintf("Synced to block %s",
+				formatBlockHeight(int(s.LatestBlockHeight))))
+		}
+	})
+
+	if err != nil {
+		sp.StopWithError("Blockchain sync failed or timed out")
+		ui.Warn("Sync did not complete within %s. The node may still be syncing.", syncTimeout)
+		ui.Detail("Check sync status with: gonka-nop status")
+		ui.Detail("You can continue and let it sync in the background")
+
+		proceed, promptErr := ui.Confirm("Continue with deployment anyway?", true)
+		if promptErr != nil {
+			return promptErr
+		}
+		if !proceed {
+			return fmt.Errorf("sync not complete: %w", err)
+		}
+		return nil
+	}
+
+	sp.StopWithSuccess("Blockchain synced")
+
+	// Fetch final status for display
+	finalStatus, fetchErr := docker.FetchSyncStatus(ctx, rpcURL)
+	if fetchErr == nil {
+		ui.Detail("Block height: %s", formatBlockHeight(int(finalStatus.LatestBlockHeight)))
+	}
+
+	return nil
+}
+
+func (p *Deploy) preDownloadModel(ctx context.Context, state *config.State) error {
+	modelName := state.SelectedModel
+	if modelName == "" {
+		modelName = defaultModel
+	}
+
+	hfHome := state.HFHome
+	if hfHome == "" {
+		hfHome = defaultHFHome
+	}
+
+	ui.Header("Model Download")
+	ui.Info("Pre-downloading model %s to %s", modelName, hfHome)
+	ui.Detail("If already cached, this completes instantly")
+
+	client, err := docker.NewComposeClient(state)
+	if err != nil {
+		return fmt.Errorf("create compose client: %w", err)
+	}
+
+	// Stream output so user sees download progress
+	client.Stdout = os.Stdout
+	client.Stderr = os.Stderr
+
+	dlErr := client.Run(ctx, "mlnode-308", "huggingface-cli", "download", modelName)
+	if dlErr != nil {
+		ui.Warn("Model pre-download failed: %v", dlErr)
+		ui.Detail("The ML node will attempt to download the model at startup")
+
+		proceed, promptErr := ui.Confirm("Continue without pre-download?", true)
+		if promptErr != nil {
+			return promptErr
+		}
+		if !proceed {
+			return fmt.Errorf("model download: %w", dlErr)
+		}
+		return nil
+	}
+
+	ui.Success("Model %s cached in %s", modelName, hfHome)
+	return nil
+}
+
+func (p *Deploy) startMLNode(ctx context.Context, state *config.State) error {
+	ui.Header("ML Node")
+
+	// Start all services (including ML node) using full compose file set
+	client, err := docker.NewComposeClient(state)
+	if err != nil {
+		return fmt.Errorf("create compose client: %w", err)
+	}
+
+	sp := ui.NewSpinner("Starting ML node services (docker compose up -d)...")
+	sp.Start()
+
+	upErr := client.Up(ctx)
+	if upErr != nil {
+		sp.StopWithError("Failed to start ML node")
+		return fmt.Errorf("start ML node: %w", upErr)
+	}
+	sp.StopWithSuccess("ML node services started")
+
+	// Show GPU config summary
 	gpuSummary := FormatGPUSummary(state.GPUs)
-	ui.Detail("ML node started: %s", gpuSummary)
-	ui.Detail("TP=%d, PP=%d, Memory Util=%.2f, Max Model Len=%d",
-		state.TPSize, state.PPSize, state.GPUMemoryUtil, state.MaxModelLen)
+	if gpuSummary != "" {
+		ui.Detail("ML node: %s", gpuSummary)
+	}
+	if state.TPSize > 0 {
+		ui.Detail("TP=%d, PP=%d, Memory Util=%.2f, Max Model Len=%d",
+			state.TPSize, state.PPSize, state.GPUMemoryUtil, state.MaxModelLen)
+	}
 	if state.KVCacheDtype != "" && state.KVCacheDtype != kvCacheDtypeAuto {
 		ui.Detail("KV Cache Dtype: %s (memory optimization)", state.KVCacheDtype)
 	}
-	ui.Detail("Attention Backend: %s", state.AttentionBackend)
-
-	err = ui.WithSpinner("Waiting for model to load (this may take several minutes)", func() error {
-		time.Sleep(3 * time.Second)
-		return nil
-	})
-	if err != nil {
-		return err
+	if state.AttentionBackend != "" {
+		ui.Detail("Attention Backend: %s", state.AttentionBackend)
 	}
-	ui.Success("Model %s loaded successfully", state.SelectedModel)
+
+	// Wait for model to load
+	adminURL := state.AdminURL
+	if adminURL == "" {
+		adminURL = defaultAdminURL
+	}
+
+	loadCtx, cancel := context.WithTimeout(ctx, modelLoadTimeout)
+	defer cancel()
+
+	sp = ui.NewSpinner("Waiting for model to load (this may take several minutes)...")
+	sp.Start()
+
+	loadErr := docker.WaitForModelLoad(loadCtx, adminURL, modelPollInterval, func(s *docker.MLNodeStatus) {
+		sp.UpdateMessage(fmt.Sprintf("Model status: %s", s.CurrentStatus))
+	})
+
+	if loadErr != nil {
+		sp.StopWithError("Model load failed or timed out")
+		ui.Warn("Model did not load within %s.", modelLoadTimeout)
+		ui.Detail("Check model status with: gonka-nop ml-node status")
+		ui.Detail("Check logs with: docker compose logs mlnode-308 --tail 100")
+
+		proceed, promptErr := ui.Confirm("Continue with deployment anyway?", true)
+		if promptErr != nil {
+			return promptErr
+		}
+		if !proceed {
+			return fmt.Errorf("model load failed: %w", loadErr)
+		}
+		return nil
+	}
+
+	sp.StopWithSuccess(fmt.Sprintf("Model %s loaded", state.SelectedModel))
 	return nil
 }
 
-func (p *Deploy) runHealthChecks(state *config.State) error {
-	err := ui.WithSpinner("Running health checks", func() error {
-		time.Sleep(1 * time.Second)
-		return nil
-	})
+func (p *Deploy) runHealthChecks(ctx context.Context, state *config.State) error {
+	ui.Header("Health Checks")
+
+	adminURL := state.AdminURL
+	if adminURL == "" {
+		adminURL = defaultAdminURL
+	}
+
+	sp := ui.NewSpinner("Running health checks via setup/report...")
+	sp.Start()
+
+	checks, err := docker.FetchHealthReport(ctx, adminURL)
+	sp.Stop()
+
 	if err != nil {
-		return err
+		ui.Warn("Could not fetch health report: %v", err)
+		ui.Detail("The API may still be starting up. Check later with: gonka-nop status")
+		return nil
 	}
 
-	checks := []struct {
-		name   string
-		detail string
-	}{
-		{"Blockchain node", "Block height 1,250,000, synced"},
-		{"TMKMS", "Consensus key signing active"},
-		{"API service", "Admin API responding on 127.0.0.1:9200"},
-		{"ML node", fmt.Sprintf("Model %s loaded, GPU healthy", state.SelectedModel)},
-		{"Proxy", fmt.Sprintf("HTTP proxy on port %d", state.APIPort)},
-		{"Bridge", "Ethereum bridge connected"},
-		{"Explorer", "Dashboard on port 5173"},
-	}
+	passed := 0
+	failed := 0
 	for _, c := range checks {
-		ui.Success("%s: %s", c.name, c.detail)
+		if c.Status == statusPass {
+			passed++
+			ui.Success("%s: %s", c.ID, c.Message)
+		} else {
+			failed++
+			ui.Error("%s: %s", c.ID, c.Message)
+		}
 	}
 
-	ui.Success("All containers started successfully")
+	total := passed + failed
+	if failed > 0 {
+		ui.Warn("Health checks: %d/%d passed (%d failed)", passed, total, failed)
+		ui.Detail("Some checks may pass after the node finishes syncing or registers on-chain")
+	} else {
+		ui.Success("All %d health checks passed", total)
+	}
+
+	return nil
+}
+
+// fixTMKMSChainID patches the TMKMS config when chain_id differs from the hardcoded default.
+// The TMKMS init script hardcodes "gonka-mainnet" regardless of CHAIN_ID env var.
+func (p *Deploy) fixTMKMSChainID(ctx context.Context, state *config.State) error {
+	if state.ChainID == "" || state.ChainID == "gonka-mainnet" {
+		return nil // no fix needed
+	}
+
+	ui.Info("Fixing TMKMS chain_id: gonka-mainnet -> %s", state.ChainID)
+
+	// Wait for tmkms to initialize and create tmkms.toml
+	time.Sleep(5 * time.Second)
+
+	// sed -i "s/gonka-mainnet/<chainID>/g" /root/.tmkms/tmkms.toml
+	sedCmd := fmt.Sprintf(`sed -i "s/gonka-mainnet/%s/g" /root/.tmkms/tmkms.toml`, state.ChainID)
+	execArgs := []string{"exec", "tmkms", "sh", "-c", sedCmd}
+
+	var name string
+	var args []string
+	if state.UseSudo {
+		name = cmdSudo
+		args = append([]string{"-E", cmdDocker}, execArgs...)
+	} else {
+		name = cmdDocker
+		args = execArgs
+	}
+
+	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204
+	cmd.Dir = state.OutputDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("sed tmkms.toml: %w\n%s", err, string(out))
+	}
+
+	// Restart tmkms to pick up the new chain_id
+	restartArgs := []string{"restart", "tmkms"}
+	if state.UseSudo {
+		name = cmdSudo
+		args = append([]string{"-E", cmdDocker}, restartArgs...)
+	} else {
+		name = cmdDocker
+		args = restartArgs
+	}
+
+	cmd = exec.CommandContext(ctx, name, args...) // #nosec G204
+	cmd.Dir = state.OutputDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("restart tmkms: %w\n%s", err, string(out))
+	}
+
+	ui.Success("TMKMS chain_id updated to %s", state.ChainID)
 	return nil
 }
 
@@ -236,20 +434,22 @@ func (p *Deploy) showSummary(state *config.State) {
 	ui.Header("Deployment Summary")
 	ui.Detail("Network Node API: http://%s:%d", state.PublicIP, state.APIPort)
 	ui.Detail("P2P Endpoint: tcp://%s:%d", state.PublicIP, state.P2PPort)
-	ui.Detail("RPC Endpoint: http://%s:26657", state.PublicIP)
 	ui.Detail("ML Node: http://127.0.0.1:8080 (localhost only)")
 	ui.Detail("Admin API: http://127.0.0.1:9200 (localhost only)")
 
 	ui.Header("Security")
-	ui.Detail("Firewall: DOCKER-USER chain configured")
-	ui.Detail("DDoS: Proxy route blocking enabled")
-	ui.Detail("Ports: Internal services bound to 127.0.0.1")
+	if state.FirewallConfigured {
+		ui.Detail("Firewall: DOCKER-USER chain configured")
+	} else {
+		ui.Warn("Firewall: Not configured. Please set up DOCKER-USER iptables rules manually")
+	}
+	ui.Detail("DDoS: Proxy route blocking enabled by default")
+	ui.Detail("Ports: Internal services should be bound to 127.0.0.1")
 
 	ui.Header("Next Steps")
-	ui.Info("1. Register your node on-chain")
-	ui.Info("2. Enable ML node via Admin API:")
-	ui.Detail("   curl -X POST http://127.0.0.1:9200/admin/v1/nodes")
-	ui.Info("3. Monitor status with: gonka-nop status")
+	ui.Info("1. Registration will follow in the next phase")
+	ui.Info("2. Monitor status: gonka-nop status")
+	ui.Info("3. Check ML node: gonka-nop ml-node list")
 }
 
 // formatBlockHeight formats a block height with comma separators

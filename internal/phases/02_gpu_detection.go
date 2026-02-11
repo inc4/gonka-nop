@@ -15,11 +15,14 @@ const (
 	mlnodeBlackwellTag = "3.0.12-blackwell"
 )
 
-// GPUDetection detects available GPUs and recommends configuration
-type GPUDetection struct{}
+// GPUDetection detects available GPUs and recommends configuration.
+type GPUDetection struct {
+	mocked bool
+}
 
-func NewGPUDetection() *GPUDetection {
-	return &GPUDetection{}
+// NewGPUDetection creates a new GPUDetection phase.
+func NewGPUDetection(mocked bool) *GPUDetection {
+	return &GPUDetection{mocked: mocked}
 }
 
 func (p *GPUDetection) Name() string {
@@ -34,24 +37,11 @@ func (p *GPUDetection) ShouldRun(state *config.State) bool {
 	return !state.IsPhaseComplete(p.Name())
 }
 
-func (p *GPUDetection) Run(_ context.Context, state *config.State) error {
-	// Detect GPUs (mocked)
-	var gpus []config.GPUInfo
-	err := ui.WithSpinner("Detecting NVIDIA GPUs", func() error {
-		time.Sleep(800 * time.Millisecond)
-		// Mocked GPU data - simulating 4x RTX 4090
-		gpus = []config.GPUInfo{
-			{Index: 0, Name: "NVIDIA GeForce RTX 4090", MemoryMB: 24564, DriverVersion: "570.133.20", Architecture: "sm_89", PCIBusID: "0000:01:00.0"},
-			{Index: 1, Name: "NVIDIA GeForce RTX 4090", MemoryMB: 24564, DriverVersion: "570.133.20", Architecture: "sm_89", PCIBusID: "0000:02:00.0"},
-			{Index: 2, Name: "NVIDIA GeForce RTX 4090", MemoryMB: 24564, DriverVersion: "570.133.20", Architecture: "sm_89", PCIBusID: "0000:03:00.0"},
-			{Index: 3, Name: "NVIDIA GeForce RTX 4090", MemoryMB: 24564, DriverVersion: "570.133.20", Architecture: "sm_89", PCIBusID: "0000:04:00.0"},
-		}
-		return nil
-	})
+func (p *GPUDetection) Run(ctx context.Context, state *config.State) error {
+	gpus, err := p.detectGPUs(ctx)
 	if err != nil {
 		return err
 	}
-
 	state.GPUs = gpus
 
 	// Display detected GPUs
@@ -63,27 +53,24 @@ func (p *GPUDetection) Run(_ context.Context, state *config.State) error {
 	}
 	ui.Info("Total: %d GPUs, %.1f GB VRAM", len(gpus), float64(totalVRAM)/1024)
 
-	// Detect GPU topology (mocked)
-	err = ui.WithSpinner("Detecting GPU topology", func() error {
-		time.Sleep(400 * time.Millisecond)
-		return nil
-	})
+	// Detect topology
+	topology, err := p.detectTopologyPhase(gpus)
 	if err != nil {
 		return err
 	}
-
-	topology := detectTopology(gpus)
 	state.GPUTopology = topology
 
 	if topology.HasNVLink {
 		ui.Success("NVLink detected - optimal for multi-GPU inference")
-	} else {
+	} else if len(gpus) > 1 {
 		ui.Warn("PCIe %s only - no NVLink. Multi-GPU performance may be reduced", topology.PCIeVersion)
 	}
 
 	// Calculate recommended configuration
 	err = ui.WithSpinner("Calculating optimal configuration", func() error {
-		time.Sleep(500 * time.Millisecond)
+		if p.mocked {
+			time.Sleep(500 * time.Millisecond)
+		}
 		return nil
 	})
 	if err != nil {
@@ -122,6 +109,47 @@ func (p *GPUDetection) Run(_ context.Context, state *config.State) error {
 
 	ui.Success("Configuration optimized for %d GPUs", len(gpus))
 	return nil
+}
+
+func (p *GPUDetection) detectGPUs(ctx context.Context) ([]config.GPUInfo, error) {
+	var gpus []config.GPUInfo
+	err := ui.WithSpinner("Detecting NVIDIA GPUs", func() error {
+		if p.mocked {
+			time.Sleep(800 * time.Millisecond)
+			gpus = []config.GPUInfo{
+				{Index: 0, Name: "NVIDIA GeForce RTX 4090", MemoryMB: 24564, DriverVersion: "570.133.20", Architecture: "sm_89", PCIBusID: "0000:01:00.0"},
+				{Index: 1, Name: "NVIDIA GeForce RTX 4090", MemoryMB: 24564, DriverVersion: "570.133.20", Architecture: "sm_89", PCIBusID: "0000:02:00.0"},
+				{Index: 2, Name: "NVIDIA GeForce RTX 4090", MemoryMB: 24564, DriverVersion: "570.133.20", Architecture: "sm_89", PCIBusID: "0000:03:00.0"},
+				{Index: 3, Name: "NVIDIA GeForce RTX 4090", MemoryMB: 24564, DriverVersion: "570.133.20", Architecture: "sm_89", PCIBusID: "0000:04:00.0"},
+			}
+			return nil
+		}
+		out, cmdErr := runCmd(ctx, "nvidia-smi",
+			"--query-gpu=index,name,memory.total,driver_version,pci.bus_id",
+			"--format=csv,noheader,nounits")
+		if cmdErr != nil {
+			return fmt.Errorf("nvidia-smi failed — GPU required: %w", cmdErr)
+		}
+		parsed, parseErr := ParseNvidiaSMICSV(out)
+		if parseErr != nil {
+			return parseErr
+		}
+		gpus = parsed
+		return nil
+	})
+	return gpus, err
+}
+
+func (p *GPUDetection) detectTopologyPhase(gpus []config.GPUInfo) (config.GPUTopology, error) {
+	var topology config.GPUTopology
+	err := ui.WithSpinner("Detecting GPU topology", func() error {
+		if p.mocked {
+			time.Sleep(400 * time.Millisecond)
+		}
+		topology = detectTopology(gpus)
+		return nil
+	})
+	return topology, err
 }
 
 // GPURecommendation holds the full GPU config recommendation
@@ -208,12 +236,12 @@ func recommendConfig(gpuCount int, vramMB int, _ string, hasNVLink bool) GPUReco
 	}
 }
 
-// detectTopology returns GPU interconnect topology (mocked)
+// detectTopology returns GPU interconnect topology.
+// NVLink detection is name-based for known GPUs.
 func detectTopology(gpus []config.GPUInfo) config.GPUTopology {
 	if len(gpus) <= 1 {
 		return config.GPUTopology{HasNVLink: false, PCIeVersion: "4.0", Interconnect: "pcie"}
 	}
-	// Mocked: RTX 4090 has no NVLink, H100/A100 do
 	name := gpus[0].Name
 	if strings.Contains(name, "H100") || strings.Contains(name, "H200") || strings.Contains(name, "A100") {
 		return config.GPUTopology{HasNVLink: true, PCIeVersion: "5.0", Interconnect: "nvlink"}
