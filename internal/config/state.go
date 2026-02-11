@@ -39,12 +39,29 @@ type State struct {
 	CompletedPhases []string `json:"completed_phases"`
 
 	// Network
-	Network string `json:"network"`
+	Network   string `json:"network"`
+	ChainID   string `json:"chain_id,omitempty"`
+	IsTestNet bool   `json:"is_test_net,omitempty"`
+
+	// Network seeds & images
+	ImageVersion    string `json:"image_version,omitempty"`
+	SeedAPIURL      string `json:"seed_api_url,omitempty"`
+	SeedRPCURL      string `json:"seed_rpc_url,omitempty"`
+	SeedP2PURL      string `json:"seed_p2p_url,omitempty"`
+	EnforcedModelID string `json:"enforced_model_id,omitempty"`
+	EthereumNetwork string `json:"ethereum_network,omitempty"` // "mainnet" or "sepolia"
+	BeaconStateURL  string `json:"beacon_state_url,omitempty"`
+	BridgeImageTag  string `json:"bridge_image_tag,omitempty"`
 
 	// Keys
-	KeyWorkflow   string `json:"key_workflow"` // "quick" or "secure"
-	AccountPubKey string `json:"account_pubkey,omitempty"`
-	KeyName       string `json:"key_name,omitempty"`
+	KeyWorkflow     string `json:"key_workflow"` // "quick" or "secure"
+	AccountPubKey   string `json:"account_pubkey,omitempty"`
+	KeyName         string `json:"key_name,omitempty"`
+	ColdKeyName     string `json:"cold_key_name,omitempty"`
+	ColdKeyAddress  string `json:"cold_key_address,omitempty"`
+	WarmKeyAddress  string `json:"warm_key_address,omitempty"`
+	KeyringPassword string `json:"-"` // never persisted
+	KeyringDir      string `json:"keyring_dir,omitempty"`
 
 	// GPU Configuration
 	GPUs             []GPUInfo   `json:"gpus,omitempty"`
@@ -69,6 +86,23 @@ type State struct {
 	APIPort         int      `json:"api_port,omitempty"`
 	PersistentPeers []string `json:"persistent_peers,omitempty"`
 
+	// ML Node ports & identity
+	InferencePort int    `json:"inference_port,omitempty"` // host-mapped port, default 5050
+	PoCPort       int    `json:"poc_port,omitempty"`       // host-mapped port, default 8080
+	MLNodeID      string `json:"mlnode_id,omitempty"`      // default "node1"
+
+	// Deploy
+	UseSudo      bool     `json:"use_sudo,omitempty"`
+	ComposeFiles []string `json:"compose_files,omitempty"` // defaults: ["docker-compose.yml", "docker-compose.mlnode.yml"]
+	AdminURL     string   `json:"admin_url,omitempty"`     // default: "http://localhost:9200"
+	RPCURL       string   `json:"rpc_url,omitempty"`       // default: "http://localhost:26657"
+
+	// Registration
+	ConsensusKey   string `json:"consensus_key,omitempty"` // ed25519 base64 from TMKMS
+	NodeRegistered bool   `json:"node_registered,omitempty"`
+	PermGranted    bool   `json:"perm_granted,omitempty"`
+	PublicURL      string `json:"public_url,omitempty"` // full URL: http://IP:port
+
 	// Security
 	FirewallConfigured bool `json:"firewall_configured,omitempty"`
 	DDoSProtection     bool `json:"ddos_protection,omitempty"`
@@ -88,6 +122,9 @@ func NewState(outputDir string) *State {
 		CompletedPhases: []string{},
 		P2PPort:         5000,
 		APIPort:         8000,
+		InferencePort:   5050,
+		PoCPort:         8080,
+		MLNodeID:        "node1",
 		statePath:       filepath.Join(outputDir, "state.json"),
 	}
 }
@@ -153,9 +190,24 @@ func (s *State) Reset() {
 	s.CurrentPhase = ""
 	s.CompletedPhases = []string{}
 	s.Network = ""
+	s.ChainID = ""
+	s.IsTestNet = false
+	s.ImageVersion = ""
+	s.SeedAPIURL = ""
+	s.SeedRPCURL = ""
+	s.SeedP2PURL = ""
+	s.EnforcedModelID = ""
+	s.EthereumNetwork = ""
+	s.BeaconStateURL = ""
+	s.BridgeImageTag = ""
 	s.KeyWorkflow = ""
 	s.AccountPubKey = ""
 	s.KeyName = ""
+	s.ColdKeyName = ""
+	s.ColdKeyAddress = ""
+	s.WarmKeyAddress = ""
+	s.KeyringPassword = ""
+	s.KeyringDir = ""
 	s.GPUs = nil
 	s.GPUTopology = GPUTopology{}
 	s.DriverInfo = DriverInfo{}
@@ -170,6 +222,17 @@ func (s *State) Reset() {
 	s.HFHome = ""
 	s.PublicIP = ""
 	s.PersistentPeers = nil
+	s.InferencePort = 0
+	s.PoCPort = 0
+	s.MLNodeID = ""
+	s.UseSudo = false
+	s.ComposeFiles = nil
+	s.AdminURL = ""
+	s.RPCURL = ""
+	s.ConsensusKey = ""
+	s.NodeRegistered = false
+	s.PermGranted = false
+	s.PublicURL = ""
 	s.FirewallConfigured = false
 	s.DDoSProtection = false
 	s.DiskFreeGB = 0

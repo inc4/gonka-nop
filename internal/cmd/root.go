@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/fatih/color"
 	"github.com/inc4/gonka-nop/internal/status"
@@ -33,8 +34,15 @@ for the Gonka decentralized AI network.
 
 It automatically detects your GPU hardware, configures the NVIDIA container
 runtime, generates optimal configurations, and deploys all required services.`,
-	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		printLogo()
+		// Resolve outputDir to absolute path — Docker bind mounts require absolute paths
+		abs, err := filepath.Abs(outputDir)
+		if err != nil {
+			return fmt.Errorf("resolve output directory: %w", err)
+		}
+		outputDir = abs
+		return nil
 	},
 }
 
@@ -44,6 +52,7 @@ func init() {
 
 	rootCmd.AddCommand(setupCmd)
 	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(registerCmd)
 	rootCmd.AddCommand(resetCmd)
 	rootCmd.AddCommand(gpuInfoCmd)
 	rootCmd.AddCommand(versionCmd)

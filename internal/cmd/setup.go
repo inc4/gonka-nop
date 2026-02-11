@@ -11,6 +11,7 @@ import (
 
 var (
 	accountPubKey string
+	mockedSetup   bool
 )
 
 var setupCmd = &cobra.Command{
@@ -28,12 +29,14 @@ This will guide you through:
 Examples:
   gonka-nop setup                    # Interactive setup
   gonka-nop setup -o /opt/gonka      # Custom output directory
-  gonka-nop setup --account-pubkey=<key>  # Provide account key`,
+  gonka-nop setup --account-pubkey=<key>  # Provide account key
+  gonka-nop setup --mocked           # Demo mode with mocked data`,
 	RunE: runSetup,
 }
 
 func init() {
 	setupCmd.Flags().StringVar(&accountPubKey, "account-pubkey", "", "Account public key (for secure setup)")
+	setupCmd.Flags().BoolVar(&mockedSetup, "mocked", false, "Use mocked data (demo mode)")
 }
 
 func runSetup(cmd *cobra.Command, _ []string) error {
@@ -52,6 +55,9 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 
 	ui.Header("Gonka Node Setup")
 	ui.Info("Output directory: %s", outputDir)
+	if mockedSetup {
+		ui.Info("Running in demo mode (--mocked)")
+	}
 
 	if len(state.CompletedPhases) > 0 {
 		ui.Info("Resuming from previous run (%d phases completed)", len(state.CompletedPhases))
@@ -59,12 +65,13 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 
 	// Build phase list
 	phaseList := []phases.Phase{
-		phases.NewPrerequisites(),
-		phases.NewGPUDetection(),
+		phases.NewPrerequisites(mockedSetup),
+		phases.NewGPUDetection(mockedSetup),
 		phases.NewNetworkSelect(),
-		phases.NewKeyManagement(state.KeyWorkflow),
+		phases.NewKeyManagement(state.KeyWorkflow, mockedSetup),
 		phases.NewConfigGeneration(),
 		phases.NewDeploy(),
+		phases.NewRegistration(),
 	}
 
 	// Create and run phase runner
