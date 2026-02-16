@@ -142,6 +142,11 @@ func (p *ConfigGeneration) Run(_ context.Context, state *config.State) error {
 
 // configureExternalPorts asks the user whether to use default ports or custom
 // (for NAT/port remapping scenarios like Vast.ai, cloud providers, etc.).
+//
+// When behind NAT, external ports (advertised in PUBLIC_URL/P2P_EXTERNAL_ADDRESS)
+// differ from internal ports (Docker binding inside the VM). For example:
+//   - External: 19246 (what the internet sees)
+//   - Internal: 8000 (what Docker binds to inside the VM, NAT forwards 19246→8000)
 func configureExternalPorts(state *config.State) error {
 	defaultP2P := 5000
 	defaultAPI := 8000
@@ -158,11 +163,13 @@ func configureExternalPorts(state *config.State) error {
 	if selected == options[0] {
 		state.P2PPort = defaultP2P
 		state.APIPort = defaultAPI
+		state.InternalP2PPort = defaultP2P
+		state.InternalAPIPort = defaultAPI
 		return nil
 	}
 
-	// Custom ports
-	p2pStr, err := ui.Input("External P2P port:", fmt.Sprintf("%d", defaultP2P))
+	// Custom ports — external ports for PUBLIC_URL and P2P_EXTERNAL_ADDRESS
+	p2pStr, err := ui.Input("External P2P port (visible from internet):", fmt.Sprintf("%d", defaultP2P))
 	if err != nil {
 		return err
 	}
@@ -172,7 +179,7 @@ func configureExternalPorts(state *config.State) error {
 	}
 	state.P2PPort = p2p
 
-	apiStr, err := ui.Input("External API port:", fmt.Sprintf("%d", defaultAPI))
+	apiStr, err := ui.Input("External API port (visible from internet):", fmt.Sprintf("%d", defaultAPI))
 	if err != nil {
 		return err
 	}
@@ -182,8 +189,62 @@ func configureExternalPorts(state *config.State) error {
 	}
 	state.APIPort = api
 
+	// Internal ports — what Docker actually binds to inside the VM.
+	// NAT/firewall forwards external port → internal port.
+	// Default to standard ports (5000/8000) since that's what NAT typically targets.
 	ui.Detail("External ports: P2P=%d, API=%d", state.P2PPort, state.APIPort)
+
+	if state.P2PPort != defaultP2P || state.APIPort != defaultAPI {
+		ui.Info("NAT detected: external ports differ from defaults")
+		ui.Detail("Docker will bind to internal ports inside the VM")
+		ui.Detail("NAT/firewall should forward external→internal (e.g. %d→%d, %d→%d)",
+			state.P2PPort, defaultP2P, state.APIPort, defaultAPI)
+
+		internalP2PStr, promptErr := ui.Input("Internal P2P port (Docker binding inside VM):", fmt.Sprintf("%d", defaultP2P))
+		if promptErr != nil {
+			return promptErr
+		}
+		var internalP2P int
+		if _, scanErr := fmt.Sscanf(internalP2PStr, "%d", &internalP2P); scanErr != nil || internalP2P < 1 || internalP2P > 65535 {
+			return fmt.Errorf("invalid internal P2P port: %s", internalP2PStr)
+		}
+		state.InternalP2PPort = internalP2P
+
+		internalAPIStr, promptErr := ui.Input("Internal API port (Docker binding inside VM):", fmt.Sprintf("%d", defaultAPI))
+		if promptErr != nil {
+			return promptErr
+		}
+		var internalAPI int
+		if _, scanErr := fmt.Sscanf(internalAPIStr, "%d", &internalAPI); scanErr != nil || internalAPI < 1 || internalAPI > 65535 {
+			return fmt.Errorf("invalid internal API port: %s", internalAPIStr)
+		}
+		state.InternalAPIPort = internalAPI
+	} else {
+		state.InternalP2PPort = defaultP2P
+		state.InternalAPIPort = defaultAPI
+	}
+
+	ui.Detail("External: P2P=%d, API=%d → Internal: P2P=%d, API=%d",
+		state.P2PPort, state.APIPort, state.InternalP2PPort, state.InternalAPIPort)
 	return nil
+}
+
+// internalAPIPort returns the Docker binding port for the API/proxy service.
+// When behind NAT, this differs from APIPort (which is the external-facing port).
+func internalAPIPort(state *config.State) int {
+	if state.InternalAPIPort > 0 {
+		return state.InternalAPIPort
+	}
+	return 8000
+}
+
+// internalP2PPort returns the Docker binding port for the P2P service.
+// When behind NAT, this differs from P2PPort (which is the external-facing port).
+func internalP2PPort(state *config.State) int {
+	if state.InternalP2PPort > 0 {
+		return state.InternalP2PPort
+	}
+	return 5000
 }
 
 func generateConfigEnv(state *config.State) error {
@@ -333,10 +394,10 @@ RPC_SERVER_URL_2=%s
 		state.AccountPubKey,
 		chainID,
 		state.PublicIP,
-		state.APIPort,
+		state.APIPort, // PUBLIC_URL: external port
 		state.PublicIP,
-		state.P2PPort,
-		state.APIPort,
+		state.P2PPort,          // P2P_EXTERNAL_ADDRESS: external port
+		internalAPIPort(state), // API_PORT: Docker binding (internal)
 		seedAPIURL,
 		seedRPCURL,
 		seedP2PURL,
@@ -549,7 +610,7 @@ services:
       - PRUNING_KEEP_RECENT=1000
       - PRUNING_INTERVAL=100
     ports:
-      - "5000:26656"  # P2P (public)
+      - "%d:26656"  # P2P (public, internal binding port)
       - "127.0.0.1:26657:26657"  # RPC (internal, access via proxy /chain-rpc/)
     expose:
       - "26658"
@@ -641,7 +702,7 @@ services:
     expose:
       - "5173"
     restart: unless-stopped
-`, imageVersion, imageVersion, persistentPeers, imageVersion,
+`, imageVersion, imageVersion, persistentPeers, internalP2PPort(state), imageVersion,
 		bridgeImageTag, ethereumNetwork, beaconStateURL, imageVersion)
 
 	return os.WriteFile(filepath.Join(state.OutputDir, "docker-compose.yml"), []byte(content), 0600)

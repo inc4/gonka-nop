@@ -311,6 +311,53 @@ func TestGenerateConfigEnv_DefaultsPeers(t *testing.T) {
 	}
 }
 
+func TestGenerateConfigEnv_NATPortSplit(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "gonka-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	state := config.NewState(tmpDir)
+	state.KeyName = "test-key"
+	state.AccountPubKey = "gonka1abc123"
+	state.PublicIP = testIP
+	// Simulate NAT: external ports differ from internal
+	state.P2PPort = 19245        // external P2P port
+	state.APIPort = 19246        // external API port
+	state.InternalP2PPort = 5000 // Docker binding for P2P
+	state.InternalAPIPort = 8000 // Docker binding for proxy
+	state.HFHome = "/mnt/hf"
+	state.SelectedModel = defaultModel
+
+	if err := generateConfigEnv(state); err != nil {
+		t.Fatalf("generateConfigEnv() error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tmpDir, "config.env"))
+	if err != nil {
+		t.Fatalf("failed to read config.env: %v", err)
+	}
+	content := string(data)
+
+	// PUBLIC_URL should use EXTERNAL port (what the internet sees)
+	if !strings.Contains(content, "PUBLIC_URL=http://"+testIP+":19246") {
+		t.Error("PUBLIC_URL should use external API port 19246")
+	}
+	// P2P_EXTERNAL_ADDRESS should use EXTERNAL port
+	if !strings.Contains(content, "P2P_EXTERNAL_ADDRESS=tcp://"+testIP+":19245") {
+		t.Error("P2P_EXTERNAL_ADDRESS should use external P2P port 19245")
+	}
+	// API_PORT should use INTERNAL port (Docker binding inside VM)
+	if !strings.Contains(content, "API_PORT=8000") {
+		t.Error("API_PORT should use internal port 8000, not external 19246")
+	}
+	// Verify API_PORT is NOT the external port
+	if strings.Contains(content, "API_PORT=19246") {
+		t.Error("API_PORT must NOT be the external port — this was the NAT bug")
+	}
+}
+
 func TestGenerateNodeConfig(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "gonka-test-*")
 	if err != nil {
@@ -494,6 +541,38 @@ func TestGenerateDockerCompose(t *testing.T) {
 	// Verify bridge image is NOT hardcoded to old version
 	if strings.Contains(content, "bridge:0.2.5-post5") {
 		t.Error("docker-compose.yml still has hardcoded bridge:0.2.5-post5")
+	}
+}
+
+func TestGenerateDockerCompose_NATInternalP2PPort(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "gonka-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	state := config.NewState(tmpDir)
+	state.PersistentPeers = []string{"abc123@node1.example.com:5000"}
+	// NAT scenario: external P2P is 19245, internal Docker binding is 5000
+	state.P2PPort = 19245
+	state.InternalP2PPort = 5000
+
+	if err := generateDockerCompose(state); err != nil {
+		t.Fatalf("generateDockerCompose() error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tmpDir, "docker-compose.yml"))
+	if err != nil {
+		t.Fatalf("failed to read docker-compose.yml: %v", err)
+	}
+	content := string(data)
+
+	// Docker should bind to INTERNAL port, not external
+	if !strings.Contains(content, "5000:26656") {
+		t.Error("docker-compose should bind P2P to internal port 5000, not external 19245")
+	}
+	if strings.Contains(content, "19245:26656") {
+		t.Error("docker-compose must NOT bind P2P to external port 19245")
 	}
 }
 

@@ -82,8 +82,10 @@ type State struct {
 
 	// Network Configuration
 	PublicIP        string   `json:"public_ip,omitempty"`
-	P2PPort         int      `json:"p2p_port,omitempty"`
-	APIPort         int      `json:"api_port,omitempty"`
+	P2PPort         int      `json:"p2p_port,omitempty"`          // external-facing P2P port (advertised to peers)
+	APIPort         int      `json:"api_port,omitempty"`          // external-facing API port (used in PUBLIC_URL)
+	InternalP2PPort int      `json:"internal_p2p_port,omitempty"` // Docker binding inside VM (default 5000)
+	InternalAPIPort int      `json:"internal_api_port,omitempty"` // Docker binding inside VM (default 8000)
 	PersistentPeers []string `json:"persistent_peers,omitempty"`
 
 	// ML Node ports & identity
@@ -122,6 +124,8 @@ func NewState(outputDir string) *State {
 		CompletedPhases: []string{},
 		P2PPort:         5000,
 		APIPort:         8000,
+		InternalP2PPort: 5000,
+		InternalAPIPort: 8000,
 		InferencePort:   5050,
 		PoCPort:         8080,
 		MLNodeID:        "node1",
@@ -221,6 +225,8 @@ func (s *State) Reset() {
 	s.AttentionBackend = ""
 	s.HFHome = ""
 	s.PublicIP = ""
+	s.InternalP2PPort = 0
+	s.InternalAPIPort = 0
 	s.PersistentPeers = nil
 	s.InferencePort = 0
 	s.PoCPort = 0
