@@ -169,29 +169,16 @@ func configureExternalPorts(state *config.State) error {
 	}
 
 	// Custom ports — external ports for PUBLIC_URL and P2P_EXTERNAL_ADDRESS
-	p2pStr, err := ui.Input("External P2P port (visible from internet):", fmt.Sprintf("%d", defaultP2P))
+	state.P2PPort, err = promptPort("External P2P port (visible from internet):", defaultP2P)
 	if err != nil {
 		return err
 	}
-	var p2p int
-	if _, scanErr := fmt.Sscanf(p2pStr, "%d", &p2p); scanErr != nil || p2p < 1 || p2p > 65535 {
-		return fmt.Errorf("invalid P2P port: %s", p2pStr)
-	}
-	state.P2PPort = p2p
-
-	apiStr, err := ui.Input("External API port (visible from internet):", fmt.Sprintf("%d", defaultAPI))
+	state.APIPort, err = promptPort("External API port (visible from internet):", defaultAPI)
 	if err != nil {
 		return err
 	}
-	var api int
-	if _, scanErr := fmt.Sscanf(apiStr, "%d", &api); scanErr != nil || api < 1 || api > 65535 {
-		return fmt.Errorf("invalid API port: %s", apiStr)
-	}
-	state.APIPort = api
 
 	// Internal ports — what Docker actually binds to inside the VM.
-	// NAT/firewall forwards external port → internal port.
-	// Default to standard ports (5000/8000) since that's what NAT typically targets.
 	ui.Detail("External ports: P2P=%d, API=%d", state.P2PPort, state.APIPort)
 
 	if state.P2PPort != defaultP2P || state.APIPort != defaultAPI {
@@ -200,25 +187,14 @@ func configureExternalPorts(state *config.State) error {
 		ui.Detail("NAT/firewall should forward external→internal (e.g. %d→%d, %d→%d)",
 			state.P2PPort, defaultP2P, state.APIPort, defaultAPI)
 
-		internalP2PStr, promptErr := ui.Input("Internal P2P port (Docker binding inside VM):", fmt.Sprintf("%d", defaultP2P))
-		if promptErr != nil {
-			return promptErr
+		state.InternalP2PPort, err = promptPort("Internal P2P port (Docker binding inside VM):", defaultP2P)
+		if err != nil {
+			return err
 		}
-		var internalP2P int
-		if _, scanErr := fmt.Sscanf(internalP2PStr, "%d", &internalP2P); scanErr != nil || internalP2P < 1 || internalP2P > 65535 {
-			return fmt.Errorf("invalid internal P2P port: %s", internalP2PStr)
+		state.InternalAPIPort, err = promptPort("Internal API port (Docker binding inside VM):", defaultAPI)
+		if err != nil {
+			return err
 		}
-		state.InternalP2PPort = internalP2P
-
-		internalAPIStr, promptErr := ui.Input("Internal API port (Docker binding inside VM):", fmt.Sprintf("%d", defaultAPI))
-		if promptErr != nil {
-			return promptErr
-		}
-		var internalAPI int
-		if _, scanErr := fmt.Sscanf(internalAPIStr, "%d", &internalAPI); scanErr != nil || internalAPI < 1 || internalAPI > 65535 {
-			return fmt.Errorf("invalid internal API port: %s", internalAPIStr)
-		}
-		state.InternalAPIPort = internalAPI
 	} else {
 		state.InternalP2PPort = defaultP2P
 		state.InternalAPIPort = defaultAPI
@@ -227,6 +203,19 @@ func configureExternalPorts(state *config.State) error {
 	ui.Detail("External: P2P=%d, API=%d → Internal: P2P=%d, API=%d",
 		state.P2PPort, state.APIPort, state.InternalP2PPort, state.InternalAPIPort)
 	return nil
+}
+
+// promptPort asks the user for a port number with validation.
+func promptPort(message string, defaultVal int) (int, error) {
+	str, err := ui.Input(message, fmt.Sprintf("%d", defaultVal))
+	if err != nil {
+		return 0, err
+	}
+	var port int
+	if _, scanErr := fmt.Sscanf(str, "%d", &port); scanErr != nil || port < 1 || port > 65535 {
+		return 0, fmt.Errorf("invalid port: %s", str)
+	}
+	return port, nil
 }
 
 // internalAPIPort returns the Docker binding port for the API/proxy service.
@@ -540,17 +529,8 @@ func generateDockerCompose(state *config.State) error {
 	// Build persistent peers for genesis seeds
 	persistentPeers := strings.Join(state.PersistentPeers, ",")
 
-	// Image version
-	imageVersion := state.ImageVersion
-	if imageVersion == "" {
-		imageVersion = config.DefaultImageVersion
-	}
-
-	// Bridge image tag (may differ from main version)
-	bridgeImageTag := state.BridgeImageTag
-	if bridgeImageTag == "" {
-		bridgeImageTag = imageVersion
-	}
+	// Resolve per-service image versions from state.Versions, with fallbacks
+	v := resolveVersions(state)
 
 	// Beacon state URL from state (set by network select)
 	beaconStateURL := state.BeaconStateURL
@@ -698,14 +678,52 @@ services:
 
   explorer:
     container_name: explorer
-    image: ghcr.io/product-science/explorer:latest
+    image: ghcr.io/product-science/explorer:%s
     expose:
       - "5173"
     restart: unless-stopped
-`, imageVersion, imageVersion, persistentPeers, internalP2PPort(state), imageVersion,
-		bridgeImageTag, ethereumNetwork, beaconStateURL, imageVersion)
+`, v.TMKMS, v.Node, persistentPeers, internalP2PPort(state), v.API,
+		v.Bridge, ethereumNetwork, beaconStateURL, v.Proxy, v.Explorer)
 
 	return os.WriteFile(filepath.Join(state.OutputDir, "docker-compose.yml"), []byte(content), 0600)
+}
+
+// resolveVersions returns per-service image versions from state.Versions,
+// falling back to state.ImageVersion/BridgeImageTag and ultimately DefaultImageVersion.
+func resolveVersions(state *config.State) config.ImageVersions {
+	v := state.Versions
+
+	fallback := state.ImageVersion
+	if fallback == "" {
+		fallback = config.DefaultImageVersion
+	}
+
+	if v.TMKMS == "" {
+		v.TMKMS = fallback
+	}
+	if v.Node == "" {
+		v.Node = fallback
+	}
+	if v.API == "" {
+		v.API = fallback
+	}
+	if v.Proxy == "" {
+		v.Proxy = fallback
+	}
+	if v.ProxySSL == "" {
+		v.ProxySSL = fallback
+	}
+	if v.Bridge == "" {
+		v.Bridge = state.BridgeImageTag
+		if v.Bridge == "" {
+			v.Bridge = fallback
+		}
+	}
+	if v.Explorer == "" {
+		v.Explorer = "latest"
+	}
+
+	return v
 }
 
 func generateMLNodeCompose(state *config.State) error {
@@ -714,16 +732,27 @@ func generateMLNodeCompose(state *config.State) error {
 		modelName = defaultModel
 	}
 
-	// Select mlnode image tag based on GPU architecture
+	// Select mlnode image tag: GPU detection (state.MLNodeImageTag) takes priority,
+	// then fetched version (state.Versions.MLNode), then hardcoded default.
 	imageTag := state.MLNodeImageTag
 	if imageTag == "" {
-		imageTag = defaultMLNodeImageTag
+		if state.Versions.MLNode != "" {
+			imageTag = state.Versions.MLNode
+		} else {
+			imageTag = defaultMLNodeImageTag
+		}
 	}
 
 	// Select attention backend
 	attentionBackend := state.AttentionBackend
 	if attentionBackend == "" {
 		attentionBackend = defaultAttentionBackend
+	}
+
+	// Nginx image tag from fetched versions (default to match upstream)
+	nginxTag := state.Versions.Nginx
+	if nginxTag == "" {
+		nginxTag = "1.28.0"
 	}
 
 	// Host-mapped ports (bound to localhost for security)
@@ -775,7 +804,7 @@ services:
   inference:
     container_name: inference
     hostname: inference
-    image: nginx:alpine
+    image: nginx:%s
     restart: unless-stopped
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
@@ -786,7 +815,7 @@ services:
     depends_on:
       - mlnode-308
 `, imageTag, hfHome, modelName, attentionBackend, hfHome, hfHome,
-		inferencePort, pocPort)
+		nginxTag, inferencePort, pocPort)
 
 	return os.WriteFile(filepath.Join(state.OutputDir, "docker-compose.mlnode.yml"), []byte(content), 0600)
 }

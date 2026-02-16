@@ -614,7 +614,7 @@ func TestGenerateMLNodeCompose(t *testing.T) {
 		{"node-config volume", "node-config.json"},
 		{"config.env", "config.env"},
 		{"inference service", "inference:"},
-		{"nginx image", "nginx:alpine"},
+		{"nginx image", "nginx:1.28.0"},
 		{"nginx.conf mount", "nginx.conf:/etc/nginx/nginx.conf"},
 		{"PoC port on inference", "127.0.0.1:8080:8080"},
 		{"ML inference port on inference", "127.0.0.1:5050:5000"},

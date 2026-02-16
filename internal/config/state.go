@@ -44,14 +44,15 @@ type State struct {
 	IsTestNet bool   `json:"is_test_net,omitempty"`
 
 	// Network seeds & images
-	ImageVersion    string `json:"image_version,omitempty"`
-	SeedAPIURL      string `json:"seed_api_url,omitempty"`
-	SeedRPCURL      string `json:"seed_rpc_url,omitempty"`
-	SeedP2PURL      string `json:"seed_p2p_url,omitempty"`
-	EnforcedModelID string `json:"enforced_model_id,omitempty"`
-	EthereumNetwork string `json:"ethereum_network,omitempty"` // "mainnet" or "sepolia"
-	BeaconStateURL  string `json:"beacon_state_url,omitempty"`
-	BridgeImageTag  string `json:"bridge_image_tag,omitempty"`
+	ImageVersion    string        `json:"image_version,omitempty"`
+	SeedAPIURL      string        `json:"seed_api_url,omitempty"`
+	SeedRPCURL      string        `json:"seed_rpc_url,omitempty"`
+	SeedP2PURL      string        `json:"seed_p2p_url,omitempty"`
+	EnforcedModelID string        `json:"enforced_model_id,omitempty"`
+	EthereumNetwork string        `json:"ethereum_network,omitempty"` // "mainnet" or "sepolia"
+	BeaconStateURL  string        `json:"beacon_state_url,omitempty"`
+	BridgeImageTag  string        `json:"bridge_image_tag,omitempty"`
+	Versions        ImageVersions `json:"versions,omitempty"` // per-service image versions from GitHub
 
 	// Keys
 	KeyWorkflow     string `json:"key_workflow"` // "quick" or "secure"
@@ -204,6 +205,7 @@ func (s *State) Reset() {
 	s.EthereumNetwork = ""
 	s.BeaconStateURL = ""
 	s.BridgeImageTag = ""
+	s.Versions = ImageVersions{}
 	s.KeyWorkflow = ""
 	s.AccountPubKey = ""
 	s.KeyName = ""
