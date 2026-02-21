@@ -384,11 +384,10 @@ func executeRepair(ctx context.Context, state *config.State, plan *RepairPlan) e
 		}
 	}
 
-	// Fix broken symlinks
-	for _, d := range plan.Diagnoses {
-		if d.ID == "broken_symlink" && plan.UpgradeName != "" {
-			fixSymlinks(ctx, state, plan.UpgradeName)
-		}
+	// Fix Cosmovisor symlinks: always update when we placed new binaries
+	// (symlink may point to "genesis" — valid but wrong after upgrade)
+	if plan.UpgradeName != "" {
+		fixSymlinks(ctx, state, plan.UpgradeName)
 	}
 
 	// Start node container
