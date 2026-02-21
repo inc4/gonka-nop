@@ -35,6 +35,9 @@ const (
 	defaultAdminURL       = "http://localhost:9200"
 )
 
+// repairGHDirectDownload is a var (not const) for test overriding.
+var repairGHDirectDownload = "https://github.com/gonka-ai/gonka/releases/download/"
+
 var repairCmd = &cobra.Command{
 	Use:   "repair",
 	Short: "Detect and fix stuck node issues",
@@ -471,6 +474,7 @@ func downloadAndPlaceBinaries(ctx context.Context, state *config.State, upgradeN
 }
 
 // fetchReleaseAssets queries GitHub API for release assets matching the upgrade name.
+// Falls back to direct download URLs if the GitHub API is unreachable.
 func fetchReleaseAssets(ctx context.Context, upgradeName string) ([]ReleaseAsset, error) {
 	// Try exact tag match first: release/{upgradeName}
 	releaseTag := "release/" + upgradeName
@@ -486,7 +490,15 @@ func fetchReleaseAssets(ctx context.Context, upgradeName string) ([]ReleaseAsset
 	}
 
 	// Try listing recent releases and find best match
-	return fetchReleaseBestMatch(ctx, upgradeName)
+	assets, listErr := fetchReleaseBestMatch(ctx, upgradeName)
+	if listErr == nil {
+		return assets, nil
+	}
+
+	// Fallback: construct direct download URLs without API (works when api.github.com
+	// is blocked but github.com is reachable)
+	ui.Warn("GitHub API unreachable, trying direct download URLs...")
+	return buildDirectDownloadAssets(ctx, upgradeName)
 }
 
 // ghReleaseResp maps the GitHub API release response.
@@ -615,6 +627,54 @@ func fetchReleaseBestMatch(ctx context.Context, upgradeName string) ([]ReleaseAs
 	}
 	return nil, fmt.Errorf("no release found matching %q. Recent releases: %s",
 		upgradeName, strings.Join(tags, ", "))
+}
+
+// buildDirectDownloadAssets constructs download URLs without the GitHub API.
+// Used when api.github.com is unreachable but github.com works.
+// Tries candidate tag patterns and verifies via HEAD request.
+func buildDirectDownloadAssets(ctx context.Context, upgradeName string) ([]ReleaseAsset, error) {
+	candidates := upgradeNameToReleaseTags(upgradeName)
+
+	client := &http.Client{
+		Timeout: repairHTTPTimeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse // don't follow redirects for HEAD
+		},
+	}
+
+	for _, tag := range candidates {
+		// GitHub encodes "/" as "%2F" in download URLs
+		encodedTag := strings.ReplaceAll(tag, "/", "%2F")
+		baseURL := repairGHDirectDownload + encodedTag + "/"
+
+		// Verify the release exists by checking one asset with HEAD
+		testURL := baseURL + repairNodeAsset
+		reqCtx, cancel := context.WithTimeout(ctx, repairHTTPTimeout)
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodHead, testURL, nil)
+		if err != nil {
+			cancel()
+			continue
+		}
+		resp, err := client.Do(req)
+		cancel()
+		if err != nil {
+			continue
+		}
+		_ = resp.Body.Close()
+
+		// GitHub returns 302 redirect for valid assets, 404 for missing
+		if resp.StatusCode == http.StatusNotFound {
+			continue
+		}
+
+		ui.Detail("Found release via direct URL: %s", tag)
+		return []ReleaseAsset{
+			{Name: repairNodeAsset, DownloadURL: baseURL + repairNodeAsset},
+			{Name: repairAPIAsset, DownloadURL: baseURL + repairAPIAsset},
+		}, nil
+	}
+
+	return nil, fmt.Errorf("could not find release for %q via direct download (tried %v)", upgradeName, candidates)
 }
 
 // findBinaryAsset finds an asset by name from the asset list.

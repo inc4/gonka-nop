@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -643,4 +645,58 @@ func TestRepairPlan(t *testing.T) {
 	if plan.UpgradeName != "v0.2.10" {
 		t.Errorf("expected UpgradeName=v0.2.10, got %s", plan.UpgradeName)
 	}
+}
+
+func TestBuildDirectDownloadAssets(t *testing.T) {
+	// Save and restore global constant (use a test server)
+	origBase := repairGHDirectDownload
+
+	t.Run("valid release returns two assets", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodHead {
+				// Simulate GitHub 302 redirect for valid assets
+				w.WriteHeader(http.StatusFound)
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer ts.Close()
+
+		// Point direct download at test server
+		repairGHDirectDownload = ts.URL + "/"
+		defer func() { repairGHDirectDownload = origBase }()
+
+		assets, err := buildDirectDownloadAssets(t.Context(), "v0.2.10")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(assets) != 2 {
+			t.Fatalf("expected 2 assets, got %d", len(assets))
+		}
+		if assets[0].Name != repairNodeAsset {
+			t.Errorf("first asset name = %q, want %q", assets[0].Name, repairNodeAsset)
+		}
+		if assets[1].Name != repairAPIAsset {
+			t.Errorf("second asset name = %q, want %q", assets[1].Name, repairAPIAsset)
+		}
+		// Direct download assets have no SHA256
+		if assets[0].SHA256 != "" {
+			t.Errorf("expected empty SHA256 for direct download, got %q", assets[0].SHA256)
+		}
+	})
+
+	t.Run("404 returns error", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer ts.Close()
+
+		repairGHDirectDownload = ts.URL + "/"
+		defer func() { repairGHDirectDownload = origBase }()
+
+		_, err := buildDirectDownloadAssets(t.Context(), "v99.99.99")
+		if err == nil {
+			t.Error("expected error for missing release")
+		}
+	})
 }

@@ -44,6 +44,7 @@ var (
 	updateCheck    bool
 	updateService  string
 	updateAdminURL string
+	updateYes      bool
 )
 
 func init() {
@@ -52,6 +53,7 @@ func init() {
 	// adminURL flag is registered by mlnode.go on the ml-node command;
 	// update command uses --admin-url as its own local flag.
 	updateCmd.Flags().StringVar(&updateAdminURL, "admin-url", defaultAdminURL, "Admin API URL")
+	updateCmd.Flags().BoolVarP(&updateYes, "yes", "y", false, "Skip confirmation prompts")
 }
 
 // VersionDiff represents a version change for a single service.
@@ -65,6 +67,10 @@ type VersionDiff struct {
 
 func runUpdate(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
+
+	if updateYes {
+		ui.SetNonInteractive(true)
+	}
 
 	state, err := config.Load(outputDir)
 	if err != nil {
