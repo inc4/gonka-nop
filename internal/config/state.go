@@ -32,6 +32,13 @@ type DriverInfo struct {
 	Consistent    bool   `json:"consistent"`               // all versions match
 }
 
+// Distro holds Linux distribution info
+type Distro struct {
+	ID      string `json:"id"`      // "ubuntu", "debian", "centos"
+	Version string `json:"version"` // "22.04", "12", "9"
+	Family  string `json:"family"`  // "debian", "rhel"
+}
+
 // State holds the persistent state of the setup process
 type State struct {
 	// Setup progress
@@ -111,8 +118,9 @@ type State struct {
 	DDoSProtection     bool `json:"ddos_protection,omitempty"`
 
 	// System
-	DiskFreeGB    int  `json:"disk_free_gb,omitempty"`
-	AutoUpdateOff bool `json:"auto_update_off,omitempty"` // unattended-upgrades disabled
+	Distro        Distro `json:"distro,omitempty"`
+	DiskFreeGB    int    `json:"disk_free_gb,omitempty"`
+	AutoUpdateOff bool   `json:"auto_update_off,omitempty"` // unattended-upgrades disabled
 
 	// Internal
 	statePath string `json:"-"`
@@ -243,6 +251,7 @@ func (s *State) Reset() {
 	s.PublicURL = ""
 	s.FirewallConfigured = false
 	s.DDoSProtection = false
+	s.Distro = Distro{}
 	s.DiskFreeGB = 0
 	s.AutoUpdateOff = false
 }

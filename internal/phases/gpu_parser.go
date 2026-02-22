@@ -116,6 +116,79 @@ func GPUArchFromName(gpuName string) string {
 	return "unknown"
 }
 
+// ParseOSRelease parses /etc/os-release content into a Distro struct.
+// Expected format: KEY=VALUE or KEY="VALUE" lines.
+func ParseOSRelease(content string) (config.Distro, error) {
+	var d config.Distro
+	vals := make(map[string]string)
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := parts[0]
+		val := strings.Trim(parts[1], `"`)
+		vals[key] = val
+	}
+	d.ID = strings.ToLower(vals["ID"])
+	d.Version = vals["VERSION_ID"]
+	if d.ID == "" {
+		return d, fmt.Errorf("could not determine distro ID from os-release")
+	}
+
+	// Infer family from ID_LIKE or known IDs
+	idLike := strings.ToLower(vals["ID_LIKE"])
+	switch {
+	case d.ID == "ubuntu" || d.ID == "debian" || strings.Contains(idLike, "debian"):
+		d.Family = "debian"
+	case d.ID == "centos" || d.ID == "rhel" || d.ID == "fedora" || d.ID == "rocky" || d.ID == "almalinux" || strings.Contains(idLike, "rhel"):
+		d.Family = "rhel"
+	case d.ID == "amzn":
+		d.Family = "rhel"
+	default:
+		d.Family = "unknown"
+	}
+	return d, nil
+}
+
+// ParseModinfoVersion extracts version from `modinfo nvidia` output.
+// Expected line: "version:        570.133.20"
+func ParseModinfoVersion(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "version:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "version:"))
+		}
+	}
+	return ""
+}
+
+// ParseFabricManagerVersion extracts version from dpkg -l output.
+// Expected line: "ii  nvidia-fabricmanager-570  570.133.20-1  amd64  ..."
+func ParseFabricManagerVersion(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 3 && fields[0] == "ii" && strings.Contains(fields[1], "fabricmanager") {
+			return fields[2]
+		}
+	}
+	return ""
+}
+
+// DriverMajorVersion extracts major version from driver string.
+// "570.133.20" → "570"
+func DriverMajorVersion(driverVersion string) string {
+	parts := strings.SplitN(driverVersion, ".", 2)
+	if len(parts) > 0 {
+		return parts[0]
+	}
+	return ""
+}
+
 // ParseDiskFreeGB parses output from `df --output=avail -BG <path>` into GB.
 // Expected output:
 //
