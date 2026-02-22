@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"time"
 
 	"github.com/inc4/gonka-nop/internal/config"
@@ -70,9 +69,6 @@ func (p *Deploy) Run(ctx context.Context, state *config.State) error {
 	}
 	if err := p.startNetworkNode(ctx, state); err != nil {
 		return err
-	}
-	if err := p.fixTMKMSChainID(ctx, state); err != nil {
-		ui.Warn("TMKMS chain ID fix failed: %v", err)
 	}
 	if err := p.monitorSync(ctx, state); err != nil {
 		return err
@@ -378,57 +374,6 @@ func (p *Deploy) runHealthChecks(ctx context.Context, state *config.State) error
 	return nil
 }
 
-// fixTMKMSChainID patches the TMKMS config when chain_id differs from the hardcoded default.
-// The TMKMS init script hardcodes "gonka-mainnet" regardless of CHAIN_ID env var.
-func (p *Deploy) fixTMKMSChainID(ctx context.Context, state *config.State) error {
-	if state.ChainID == "" || state.ChainID == "gonka-mainnet" {
-		return nil // no fix needed
-	}
-
-	ui.Info("Fixing TMKMS chain_id: gonka-mainnet -> %s", state.ChainID)
-
-	// Wait for tmkms to initialize and create tmkms.toml
-	time.Sleep(5 * time.Second)
-
-	// sed -i "s/gonka-mainnet/<chainID>/g" /root/.tmkms/tmkms.toml
-	sedCmd := fmt.Sprintf(`sed -i "s/gonka-mainnet/%s/g" /root/.tmkms/tmkms.toml`, state.ChainID)
-	execArgs := []string{"exec", "tmkms", "sh", "-c", sedCmd}
-
-	var name string
-	var args []string
-	if state.UseSudo {
-		name = cmdSudo
-		args = append([]string{"-E", cmdDocker}, execArgs...)
-	} else {
-		name = cmdDocker
-		args = execArgs
-	}
-
-	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204
-	cmd.Dir = state.OutputDir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("sed tmkms.toml: %w\n%s", err, string(out))
-	}
-
-	// Restart tmkms to pick up the new chain_id
-	restartArgs := []string{"restart", "tmkms"}
-	if state.UseSudo {
-		name = cmdSudo
-		args = append([]string{"-E", cmdDocker}, restartArgs...)
-	} else {
-		name = cmdDocker
-		args = restartArgs
-	}
-
-	cmd = exec.CommandContext(ctx, name, args...) // #nosec G204
-	cmd.Dir = state.OutputDir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("restart tmkms: %w\n%s", err, string(out))
-	}
-
-	ui.Success("TMKMS chain_id updated to %s", state.ChainID)
-	return nil
-}
 
 func (p *Deploy) showSummary(state *config.State) {
 	ui.Header("Deployment Summary")

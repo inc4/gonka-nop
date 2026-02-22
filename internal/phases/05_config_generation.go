@@ -555,6 +555,7 @@ services:
     restart: unless-stopped
     environment:
       - VALIDATOR_LISTEN_ADDRESS=tcp://node:26658
+      - CHAIN_ID=${CHAIN_ID}
     volumes:
       - .tmkms:/root/.tmkms
 

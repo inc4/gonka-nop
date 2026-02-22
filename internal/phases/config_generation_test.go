@@ -523,6 +523,7 @@ func TestGenerateDockerCompose(t *testing.T) {
 		{"DISABLE_CHAIN_GRPC", "DISABLE_CHAIN_GRPC"},
 		{"SYNC_WITH_SNAPSHOTS", "SYNC_WITH_SNAPSHOTS"},
 		{"tmkms service", "tmkms"},
+		{"tmkms CHAIN_ID env var", "CHAIN_ID=${CHAIN_ID}"},
 		{"node service", "node"},
 		{"api service", "api"},
 		{"proxy service", "proxy"},
