@@ -34,7 +34,7 @@ func (p *NetworkSelect) ShouldRun(state *config.State) bool {
 	return !state.IsPhaseComplete(p.Name())
 }
 
-func (p *NetworkSelect) Run(_ context.Context, state *config.State) error {
+func (p *NetworkSelect) Run(ctx context.Context, state *config.State) error {
 	networks := []string{
 		"mainnet - Production network",
 		"testnet - Test network",
@@ -57,11 +57,17 @@ func (p *NetworkSelect) Run(_ context.Context, state *config.State) error {
 	// Populate state from network config
 	applyNetworkConfig(state)
 
+	// Fetch latest image versions from GitHub
+	fetchImageVersions(ctx, state)
+
 	// Display
 	ui.Header("Network Configuration")
 	ui.Detail("Chain ID: %s", state.ChainID)
 	ui.Detail("Seed API: %s", state.SeedAPIURL)
 	ui.Detail("Image version: %s", state.ImageVersion)
+	if state.Versions.Source != "" {
+		ui.Detail("Version source: %s", state.Versions.Source)
+	}
 	if len(state.PersistentPeers) > 0 {
 		ui.Detail("Persistent peers: %d configured", len(state.PersistentPeers))
 	}
@@ -73,6 +79,28 @@ func (p *NetworkSelect) Run(_ context.Context, state *config.State) error {
 	}
 
 	return nil
+}
+
+// fetchImageVersions fetches the latest container image versions from GitHub.
+// On failure, falls back to hardcoded defaults with a warning.
+func fetchImageVersions(ctx context.Context, state *config.State) {
+	ui.Detail("Fetching latest image versions from GitHub...")
+
+	versions, err := config.FetchImageVersions(ctx, state.IsTestNet)
+	if err != nil {
+		ui.Warn("Could not fetch latest versions: %v", err)
+		ui.Detail("Using fallback versions")
+	}
+
+	state.Versions = versions
+
+	// Update legacy fields for backward compatibility
+	if main := versions.MainImageVersion(); main != "" {
+		state.ImageVersion = main
+	}
+	if versions.Bridge != "" {
+		state.BridgeImageTag = versions.Bridge
+	}
 }
 
 // applyNetworkConfig populates state fields from the selected network config.

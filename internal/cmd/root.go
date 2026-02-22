@@ -59,6 +59,7 @@ func init() {
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(cleanupCmd)
 	rootCmd.AddCommand(mlNodeCmd)
+	rootCmd.AddCommand(repairCmd)
 }
 
 // Execute runs the root command
@@ -250,43 +251,6 @@ func displayRealGPUInfo() {
 
 	_, _ = yellow.Println("  ⚠ nvidia-smi not available or no GPUs detected")
 	fmt.Println("  Run with --mocked to see demo output")
-}
-
-// --- Update Command ---
-
-var updateCmd = &cobra.Command{
-	Use:   "update",
-	Short: "Safely update node containers",
-	Long: `Perform a safe rolling update of node containers.
-
-The update follows a safe rollout procedure:
-  1. Check current timeslot allocation
-  2. Disable ML node via Admin API
-  3. Pull new container images
-  4. Recreate containers
-  5. Wait for model to reload
-  6. Re-enable ML node
-  7. Verify PoC participation
-
-Examples:
-  gonka-nop update                # Update all containers
-  gonka-nop update --service mlnode  # Update ML node only
-  gonka-nop update --dry-run      # Show what would be updated`,
-	RunE: runUpdate,
-}
-
-func runUpdate(_ *cobra.Command, _ []string) error {
-	fmt.Println("Update command — planned for M6 (Operations)")
-	fmt.Println()
-	fmt.Println("Safe rollout procedure:")
-	fmt.Println("  1. Check timeslot_allocation (avoid updating during active slot)")
-	fmt.Println("  2. Disable ML node: POST http://127.0.0.1:9200/admin/v1/nodes/:id/disable")
-	fmt.Println("  3. Pull new images: docker compose pull")
-	fmt.Println("  4. Recreate containers: docker compose up -d")
-	fmt.Println("  5. Wait for model to load (health check loop)")
-	fmt.Println("  6. Re-enable ML node: POST http://127.0.0.1:9200/admin/v1/nodes/:id/enable")
-	fmt.Println("  7. Verify PoC participation resumes")
-	return nil
 }
 
 // --- Cleanup Command ---

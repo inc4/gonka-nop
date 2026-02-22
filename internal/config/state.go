@@ -44,14 +44,15 @@ type State struct {
 	IsTestNet bool   `json:"is_test_net,omitempty"`
 
 	// Network seeds & images
-	ImageVersion    string `json:"image_version,omitempty"`
-	SeedAPIURL      string `json:"seed_api_url,omitempty"`
-	SeedRPCURL      string `json:"seed_rpc_url,omitempty"`
-	SeedP2PURL      string `json:"seed_p2p_url,omitempty"`
-	EnforcedModelID string `json:"enforced_model_id,omitempty"`
-	EthereumNetwork string `json:"ethereum_network,omitempty"` // "mainnet" or "sepolia"
-	BeaconStateURL  string `json:"beacon_state_url,omitempty"`
-	BridgeImageTag  string `json:"bridge_image_tag,omitempty"`
+	ImageVersion    string        `json:"image_version,omitempty"`
+	SeedAPIURL      string        `json:"seed_api_url,omitempty"`
+	SeedRPCURL      string        `json:"seed_rpc_url,omitempty"`
+	SeedP2PURL      string        `json:"seed_p2p_url,omitempty"`
+	EnforcedModelID string        `json:"enforced_model_id,omitempty"`
+	EthereumNetwork string        `json:"ethereum_network,omitempty"` // "mainnet" or "sepolia"
+	BeaconStateURL  string        `json:"beacon_state_url,omitempty"`
+	BridgeImageTag  string        `json:"bridge_image_tag,omitempty"`
+	Versions        ImageVersions `json:"versions,omitempty"` // per-service image versions from GitHub
 
 	// Keys
 	KeyWorkflow     string `json:"key_workflow"` // "quick" or "secure"
@@ -82,8 +83,10 @@ type State struct {
 
 	// Network Configuration
 	PublicIP        string   `json:"public_ip,omitempty"`
-	P2PPort         int      `json:"p2p_port,omitempty"`
-	APIPort         int      `json:"api_port,omitempty"`
+	P2PPort         int      `json:"p2p_port,omitempty"`          // external-facing P2P port (advertised to peers)
+	APIPort         int      `json:"api_port,omitempty"`          // external-facing API port (used in PUBLIC_URL)
+	InternalP2PPort int      `json:"internal_p2p_port,omitempty"` // Docker binding inside VM (default 5000)
+	InternalAPIPort int      `json:"internal_api_port,omitempty"` // Docker binding inside VM (default 8000)
 	PersistentPeers []string `json:"persistent_peers,omitempty"`
 
 	// ML Node ports & identity
@@ -122,6 +125,8 @@ func NewState(outputDir string) *State {
 		CompletedPhases: []string{},
 		P2PPort:         5000,
 		APIPort:         8000,
+		InternalP2PPort: 5000,
+		InternalAPIPort: 8000,
 		InferencePort:   5050,
 		PoCPort:         8080,
 		MLNodeID:        "node1",
@@ -200,6 +205,7 @@ func (s *State) Reset() {
 	s.EthereumNetwork = ""
 	s.BeaconStateURL = ""
 	s.BridgeImageTag = ""
+	s.Versions = ImageVersions{}
 	s.KeyWorkflow = ""
 	s.AccountPubKey = ""
 	s.KeyName = ""
@@ -221,6 +227,8 @@ func (s *State) Reset() {
 	s.AttentionBackend = ""
 	s.HFHome = ""
 	s.PublicIP = ""
+	s.InternalP2PPort = 0
+	s.InternalAPIPort = 0
 	s.PersistentPeers = nil
 	s.InferencePort = 0
 	s.PoCPort = 0

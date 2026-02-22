@@ -12,6 +12,20 @@ import (
 var (
 	accountPubKey string
 	mockedSetup   bool
+
+	// Non-interactive flags
+	yesFlag         bool
+	flagNetwork     string
+	flagKeyWorkflow string
+	flagKeyName     string
+	flagKeyringPass string
+	flagPublicIP    string
+	flagHFHome      string
+	flagPorts       string
+	flagExtP2PPort  string
+	flagExtAPIPort  string
+	flagIntP2PPort  string
+	flagIntAPIPort  string
 )
 
 var setupCmd = &cobra.Command{
@@ -30,17 +44,78 @@ Examples:
   gonka-nop setup                    # Interactive setup
   gonka-nop setup -o /opt/gonka      # Custom output directory
   gonka-nop setup --account-pubkey=<key>  # Provide account key
-  gonka-nop setup --mocked           # Demo mode with mocked data`,
+  gonka-nop setup --mocked           # Demo mode with mocked data
+
+  # Non-interactive setup (for scripting / SSH):
+  gonka-nop setup -y --network testnet --key-workflow quick \
+    --key-name mynode --keyring-password pass123 \
+    --public-ip 1.2.3.4 --ports custom \
+    --ext-p2p-port 19245 --ext-api-port 19246`,
 	RunE: runSetup,
 }
 
 func init() {
 	setupCmd.Flags().StringVar(&accountPubKey, "account-pubkey", "", "Account public key (for secure setup)")
 	setupCmd.Flags().BoolVar(&mockedSetup, "mocked", false, "Use mocked data (demo mode)")
+
+	// Non-interactive flags
+	setupCmd.Flags().BoolVarP(&yesFlag, "yes", "y", false, "Non-interactive mode (auto-accept confirmations)")
+	setupCmd.Flags().StringVar(&flagNetwork, "network", "", "Network selection (mainnet or testnet)")
+	setupCmd.Flags().StringVar(&flagKeyWorkflow, "key-workflow", "", "Key management workflow (quick or secure)")
+	setupCmd.Flags().StringVar(&flagKeyName, "key-name", "", "Base name for keys")
+	setupCmd.Flags().StringVar(&flagKeyringPass, "keyring-password", "", "Keyring password")
+	setupCmd.Flags().StringVar(&flagPublicIP, "public-ip", "", "Server public IP or hostname")
+	setupCmd.Flags().StringVar(&flagHFHome, "hf-home", "", "HuggingFace cache directory")
+	setupCmd.Flags().StringVar(&flagPorts, "ports", "", "Port configuration mode (default or custom)")
+	setupCmd.Flags().StringVar(&flagExtP2PPort, "ext-p2p-port", "", "External P2P port (NAT)")
+	setupCmd.Flags().StringVar(&flagExtAPIPort, "ext-api-port", "", "External API port (NAT)")
+	setupCmd.Flags().StringVar(&flagIntP2PPort, "int-p2p-port", "", "Internal P2P port (Docker binding)")
+	setupCmd.Flags().StringVar(&flagIntAPIPort, "int-api-port", "", "Internal API port (Docker binding)")
+}
+
+// setupOverrides maps CLI flag values to ui prompt overrides.
+func setupOverrides() {
+	ui.SetNonInteractive(true)
+
+	overrides := []struct {
+		flag, prompt string
+	}{
+		{flagNetwork, "Select network"},
+		{flagKeyWorkflow, "key management workflow"},
+		{flagKeyName, "base name"},
+		{flagKeyringPass, "keyring password"},
+		{flagPublicIP, "public IP"},
+		{flagHFHome, "HuggingFace"},
+		{flagPorts, "port configuration"},
+		{flagExtP2PPort, "External P2P"},
+		{flagExtAPIPort, "External API"},
+		{flagIntP2PPort, "Internal P2P"},
+		{flagIntAPIPort, "Internal API"},
+	}
+	for _, o := range overrides {
+		if o.flag != "" {
+			ui.SetOverride(o.prompt, o.flag)
+		}
+	}
+
+	// key-name also matches "name for your server" prompt (secure workflow)
+	if flagKeyName != "" {
+		ui.SetOverride("name for your server", flagKeyName)
+	}
+
+	// keyring-password also matches generic "password" prompt
+	if flagKeyringPass != "" {
+		ui.SetOverride("password", flagKeyringPass)
+	}
 }
 
 func runSetup(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
+
+	// Enable non-interactive mode if --yes flag is set
+	if yesFlag {
+		setupOverrides()
+	}
 
 	// Load or create state
 	state, err := config.Load(outputDir)
@@ -57,6 +132,9 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 	ui.Info("Output directory: %s", outputDir)
 	if mockedSetup {
 		ui.Info("Running in demo mode (--mocked)")
+	}
+	if yesFlag {
+		ui.Info("Running in non-interactive mode (--yes)")
 	}
 
 	if len(state.CompletedPhases) > 0 {

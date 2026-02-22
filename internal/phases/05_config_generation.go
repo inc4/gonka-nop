@@ -142,6 +142,11 @@ func (p *ConfigGeneration) Run(_ context.Context, state *config.State) error {
 
 // configureExternalPorts asks the user whether to use default ports or custom
 // (for NAT/port remapping scenarios like Vast.ai, cloud providers, etc.).
+//
+// When behind NAT, external ports (advertised in PUBLIC_URL/P2P_EXTERNAL_ADDRESS)
+// differ from internal ports (Docker binding inside the VM). For example:
+//   - External: 19246 (what the internet sees)
+//   - Internal: 8000 (what Docker binds to inside the VM, NAT forwards 19246→8000)
 func configureExternalPorts(state *config.State) error {
 	defaultP2P := 5000
 	defaultAPI := 8000
@@ -158,32 +163,77 @@ func configureExternalPorts(state *config.State) error {
 	if selected == options[0] {
 		state.P2PPort = defaultP2P
 		state.APIPort = defaultAPI
+		state.InternalP2PPort = defaultP2P
+		state.InternalAPIPort = defaultAPI
 		return nil
 	}
 
-	// Custom ports
-	p2pStr, err := ui.Input("External P2P port:", fmt.Sprintf("%d", defaultP2P))
+	// Custom ports — external ports for PUBLIC_URL and P2P_EXTERNAL_ADDRESS
+	state.P2PPort, err = promptPort("External P2P port (visible from internet):", defaultP2P)
 	if err != nil {
 		return err
 	}
-	var p2p int
-	if _, scanErr := fmt.Sscanf(p2pStr, "%d", &p2p); scanErr != nil || p2p < 1 || p2p > 65535 {
-		return fmt.Errorf("invalid P2P port: %s", p2pStr)
-	}
-	state.P2PPort = p2p
-
-	apiStr, err := ui.Input("External API port:", fmt.Sprintf("%d", defaultAPI))
+	state.APIPort, err = promptPort("External API port (visible from internet):", defaultAPI)
 	if err != nil {
 		return err
 	}
-	var api int
-	if _, scanErr := fmt.Sscanf(apiStr, "%d", &api); scanErr != nil || api < 1 || api > 65535 {
-		return fmt.Errorf("invalid API port: %s", apiStr)
-	}
-	state.APIPort = api
 
+	// Internal ports — what Docker actually binds to inside the VM.
 	ui.Detail("External ports: P2P=%d, API=%d", state.P2PPort, state.APIPort)
+
+	if state.P2PPort != defaultP2P || state.APIPort != defaultAPI {
+		ui.Info("NAT detected: external ports differ from defaults")
+		ui.Detail("Docker will bind to internal ports inside the VM")
+		ui.Detail("NAT/firewall should forward external→internal (e.g. %d→%d, %d→%d)",
+			state.P2PPort, defaultP2P, state.APIPort, defaultAPI)
+
+		state.InternalP2PPort, err = promptPort("Internal P2P port (Docker binding inside VM):", defaultP2P)
+		if err != nil {
+			return err
+		}
+		state.InternalAPIPort, err = promptPort("Internal API port (Docker binding inside VM):", defaultAPI)
+		if err != nil {
+			return err
+		}
+	} else {
+		state.InternalP2PPort = defaultP2P
+		state.InternalAPIPort = defaultAPI
+	}
+
+	ui.Detail("External: P2P=%d, API=%d → Internal: P2P=%d, API=%d",
+		state.P2PPort, state.APIPort, state.InternalP2PPort, state.InternalAPIPort)
 	return nil
+}
+
+// promptPort asks the user for a port number with validation.
+func promptPort(message string, defaultVal int) (int, error) {
+	str, err := ui.Input(message, fmt.Sprintf("%d", defaultVal))
+	if err != nil {
+		return 0, err
+	}
+	var port int
+	if _, scanErr := fmt.Sscanf(str, "%d", &port); scanErr != nil || port < 1 || port > 65535 {
+		return 0, fmt.Errorf("invalid port: %s", str)
+	}
+	return port, nil
+}
+
+// internalAPIPort returns the Docker binding port for the API/proxy service.
+// When behind NAT, this differs from APIPort (which is the external-facing port).
+func internalAPIPort(state *config.State) int {
+	if state.InternalAPIPort > 0 {
+		return state.InternalAPIPort
+	}
+	return 8000
+}
+
+// internalP2PPort returns the Docker binding port for the P2P service.
+// When behind NAT, this differs from P2PPort (which is the external-facing port).
+func internalP2PPort(state *config.State) int {
+	if state.InternalP2PPort > 0 {
+		return state.InternalP2PPort
+	}
+	return 5000
 }
 
 func generateConfigEnv(state *config.State) error {
@@ -333,10 +383,10 @@ RPC_SERVER_URL_2=%s
 		state.AccountPubKey,
 		chainID,
 		state.PublicIP,
-		state.APIPort,
+		state.APIPort, // PUBLIC_URL: external port
 		state.PublicIP,
-		state.P2PPort,
-		state.APIPort,
+		state.P2PPort,          // P2P_EXTERNAL_ADDRESS: external port
+		internalAPIPort(state), // API_PORT: Docker binding (internal)
 		seedAPIURL,
 		seedRPCURL,
 		seedP2PURL,
@@ -479,17 +529,8 @@ func generateDockerCompose(state *config.State) error {
 	// Build persistent peers for genesis seeds
 	persistentPeers := strings.Join(state.PersistentPeers, ",")
 
-	// Image version
-	imageVersion := state.ImageVersion
-	if imageVersion == "" {
-		imageVersion = config.DefaultImageVersion
-	}
-
-	// Bridge image tag (may differ from main version)
-	bridgeImageTag := state.BridgeImageTag
-	if bridgeImageTag == "" {
-		bridgeImageTag = imageVersion
-	}
+	// Resolve per-service image versions from state.Versions, with fallbacks
+	v := resolveVersions(state)
 
 	// Beacon state URL from state (set by network select)
 	beaconStateURL := state.BeaconStateURL
@@ -549,7 +590,7 @@ services:
       - PRUNING_KEEP_RECENT=1000
       - PRUNING_INTERVAL=100
     ports:
-      - "5000:26656"  # P2P (public)
+      - "%d:26656"  # P2P (public, internal binding port)
       - "127.0.0.1:26657:26657"  # RPC (internal, access via proxy /chain-rpc/)
     expose:
       - "26658"
@@ -637,14 +678,52 @@ services:
 
   explorer:
     container_name: explorer
-    image: ghcr.io/product-science/explorer:latest
+    image: ghcr.io/product-science/explorer:%s
     expose:
       - "5173"
     restart: unless-stopped
-`, imageVersion, imageVersion, persistentPeers, imageVersion,
-		bridgeImageTag, ethereumNetwork, beaconStateURL, imageVersion)
+`, v.TMKMS, v.Node, persistentPeers, internalP2PPort(state), v.API,
+		v.Bridge, ethereumNetwork, beaconStateURL, v.Proxy, v.Explorer)
 
 	return os.WriteFile(filepath.Join(state.OutputDir, "docker-compose.yml"), []byte(content), 0600)
+}
+
+// resolveVersions returns per-service image versions from state.Versions,
+// falling back to state.ImageVersion/BridgeImageTag and ultimately DefaultImageVersion.
+func resolveVersions(state *config.State) config.ImageVersions {
+	v := state.Versions
+
+	fallback := state.ImageVersion
+	if fallback == "" {
+		fallback = config.DefaultImageVersion
+	}
+
+	if v.TMKMS == "" {
+		v.TMKMS = fallback
+	}
+	if v.Node == "" {
+		v.Node = fallback
+	}
+	if v.API == "" {
+		v.API = fallback
+	}
+	if v.Proxy == "" {
+		v.Proxy = fallback
+	}
+	if v.ProxySSL == "" {
+		v.ProxySSL = fallback
+	}
+	if v.Bridge == "" {
+		v.Bridge = state.BridgeImageTag
+		if v.Bridge == "" {
+			v.Bridge = fallback
+		}
+	}
+	if v.Explorer == "" {
+		v.Explorer = "latest"
+	}
+
+	return v
 }
 
 func generateMLNodeCompose(state *config.State) error {
@@ -653,16 +732,27 @@ func generateMLNodeCompose(state *config.State) error {
 		modelName = defaultModel
 	}
 
-	// Select mlnode image tag based on GPU architecture
+	// Select mlnode image tag: GPU detection (state.MLNodeImageTag) takes priority,
+	// then fetched version (state.Versions.MLNode), then hardcoded default.
 	imageTag := state.MLNodeImageTag
 	if imageTag == "" {
-		imageTag = defaultMLNodeImageTag
+		if state.Versions.MLNode != "" {
+			imageTag = state.Versions.MLNode
+		} else {
+			imageTag = defaultMLNodeImageTag
+		}
 	}
 
 	// Select attention backend
 	attentionBackend := state.AttentionBackend
 	if attentionBackend == "" {
 		attentionBackend = defaultAttentionBackend
+	}
+
+	// Nginx image tag from fetched versions (default to match upstream)
+	nginxTag := state.Versions.Nginx
+	if nginxTag == "" {
+		nginxTag = "1.28.0"
 	}
 
 	// Host-mapped ports (bound to localhost for security)
@@ -714,7 +804,7 @@ services:
   inference:
     container_name: inference
     hostname: inference
-    image: nginx:alpine
+    image: nginx:%s
     restart: unless-stopped
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
@@ -725,7 +815,7 @@ services:
     depends_on:
       - mlnode-308
 `, imageTag, hfHome, modelName, attentionBackend, hfHome, hfHome,
-		inferencePort, pocPort)
+		nginxTag, inferencePort, pocPort)
 
 	return os.WriteFile(filepath.Join(state.OutputDir, "docker-compose.mlnode.yml"), []byte(content), 0600)
 }
