@@ -113,7 +113,7 @@ func installDocker(ctx context.Context, distro config.Distro, useSudo bool) erro
 
 			// Download GPG key
 			gpgCmd := fmt.Sprintf(
-				"curl -fsSL https://download.docker.com/linux/%s/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg",
+				"curl -fsSL https://download.docker.com/linux/%s/gpg | gpg --batch --yes --dearmor -o /etc/apt/keyrings/docker.gpg",
 				distro.ID)
 			_, err := runSudoShell(ctx, useSudo, gpgCmd)
 			if err != nil {
@@ -245,7 +245,7 @@ func installContainerToolkit(ctx context.Context, distro config.Distro, useSudo 
 	}{
 		{"Adding NVIDIA Container Toolkit repository", func() error {
 			gpgCmd := fmt.Sprintf(
-				"curl -fsSL %s/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg",
+				"curl -fsSL %s/gpgkey | gpg --batch --yes --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg",
 				nctRepoBase)
 			_, err := runSudoShell(ctx, useSudo, gpgCmd)
 			if err != nil {
