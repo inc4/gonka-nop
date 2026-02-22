@@ -198,6 +198,147 @@ func TestGPUArchFromName_Unknown(t *testing.T) {
 	}
 }
 
+func TestParseOSRelease(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantID     string
+		wantVer    string
+		wantFamily string
+		wantErr    bool
+	}{
+		{
+			name: "Ubuntu 22.04",
+			input: `PRETTY_NAME="Ubuntu 22.04.5 LTS"
+NAME="Ubuntu"
+VERSION_ID="22.04"
+VERSION="22.04.5 LTS (Jammy Jellyfish)"
+ID=ubuntu
+ID_LIKE=debian`,
+			wantID: "ubuntu", wantVer: "22.04", wantFamily: "debian",
+		},
+		{
+			name: "Debian 12",
+			input: `ID=debian
+VERSION_ID="12"
+ID_LIKE=""`,
+			wantID: "debian", wantVer: "12", wantFamily: "debian",
+		},
+		{
+			name: "CentOS 9",
+			input: `ID="centos"
+VERSION_ID="9"
+ID_LIKE="rhel fedora"`,
+			wantID: "centos", wantVer: "9", wantFamily: "rhel",
+		},
+		{
+			name: "Rocky Linux",
+			input: `ID="rocky"
+VERSION_ID="9.3"
+ID_LIKE="rhel centos fedora"`,
+			wantID: "rocky", wantVer: "9.3", wantFamily: "rhel",
+		},
+		{
+			name: "Amazon Linux",
+			input: `ID="amzn"
+VERSION_ID="2023"`,
+			wantID: "amzn", wantVer: "2023", wantFamily: "rhel",
+		},
+		{
+			name:    "Empty",
+			input:   "",
+			wantErr: true,
+		},
+		{
+			name:    "No ID",
+			input:   "VERSION_ID=22.04",
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, err := ParseOSRelease(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr {
+				return
+			}
+			if d.ID != tt.wantID {
+				t.Errorf("ID = %q, want %q", d.ID, tt.wantID)
+			}
+			if d.Version != tt.wantVer {
+				t.Errorf("Version = %q, want %q", d.Version, tt.wantVer)
+			}
+			if d.Family != tt.wantFamily {
+				t.Errorf("Family = %q, want %q", d.Family, tt.wantFamily)
+			}
+		})
+	}
+}
+
+func TestParseModinfoVersion(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"Normal", "filename:       /lib/modules/5.15.0/nvidia.ko\nversion:        570.133.20\nsrcversion:     abc123", "570.133.20"},
+		{"Extra spaces", "version:   560.35.03  ", "560.35.03"},
+		{"No version line", "filename: /lib/modules/nvidia.ko\nsrcversion: abc", ""},
+		{"Empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseModinfoVersion(tt.input)
+			if got != tt.want {
+				t.Errorf("ParseModinfoVersion() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseFabricManagerVersion(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"Installed", "ii  nvidia-fabricmanager-570  570.133.20-1  amd64  NVIDIA Fabric Manager", "570.133.20-1"},
+		{"Not installed", "dpkg-query: no packages found matching nvidia-fabricmanager*", ""},
+		{"Empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseFabricManagerVersion(tt.input)
+			if got != tt.want {
+				t.Errorf("ParseFabricManagerVersion() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDriverMajorVersion(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"570.133.20", "570"},
+		{"560.35.03", "560"},
+		{"535", "535"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := DriverMajorVersion(tt.input)
+			if got != tt.want {
+				t.Errorf("DriverMajorVersion(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseDiskFreeGB(t *testing.T) {
 	tests := []struct {
 		name    string
