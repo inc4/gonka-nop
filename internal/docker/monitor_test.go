@@ -107,7 +107,7 @@ func TestWaitForSync(t *testing.T) {
 	defer cancel()
 
 	var progressCalls int
-	err := WaitForSync(ctx, srv.URL, 50*time.Millisecond, func(_ *SyncStatus) {
+	err := WaitForSync(ctx, srv.URL, 50*time.Millisecond, func(_ *SyncProgress) {
 		progressCalls++
 	})
 	if err != nil {

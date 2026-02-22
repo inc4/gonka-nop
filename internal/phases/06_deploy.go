@@ -12,10 +12,11 @@ import (
 )
 
 const (
-	defaultAdminURL   = "http://localhost:9200"
-	defaultRPCURL     = "http://localhost:26657"
-	syncTimeout       = 30 * time.Minute
-	syncPollInterval  = 5 * time.Second
+	defaultAdminURL    = "http://localhost:9200"
+	defaultRPCURL      = "http://localhost:26657"
+	pullTimeout        = 30 * time.Minute
+	syncStartupTimeout = 90 * time.Second
+	syncPollInterval   = 5 * time.Second
 	modelLoadTimeout  = 15 * time.Minute
 	modelPollInterval = 10 * time.Second
 	cmdSudo           = "sudo"
@@ -106,13 +107,22 @@ func (p *Deploy) pullImages(ctx context.Context, state *config.State) error {
 		return fmt.Errorf("create compose client: %w", err)
 	}
 
-	sp := ui.NewSpinner("Pulling container images (this may take several minutes)...")
-	sp.Start()
+	ui.Info("Pulling container images (this may take several minutes)...")
 
-	pullErr := client.Pull(ctx)
+	// Stream pull output so the user sees download progress per layer.
+	client.Stdout = os.Stdout
+	client.Stderr = os.Stderr
+
+	pullCtx, pullCancel := context.WithTimeout(ctx, pullTimeout)
+	defer pullCancel()
+
+	pullErr := client.Pull(pullCtx)
+
+	// Reset output streams for subsequent compose operations
+	client.Stdout = nil
+	client.Stderr = nil
 
 	if pullErr != nil {
-		sp.StopWithError("Failed to pull some images")
 		ui.Warn("Pull error: %v", pullErr)
 		ui.Detail("Some images may already be cached locally")
 
@@ -123,9 +133,10 @@ func (p *Deploy) pullImages(ctx context.Context, state *config.State) error {
 		if !proceed {
 			return fmt.Errorf("pull images: %w", pullErr)
 		}
+	} else {
+		ui.Success("Container images pulled")
 	}
 
-	sp.StopWithSuccess("Container images pulled")
 	return nil
 }
 
@@ -174,44 +185,48 @@ func (p *Deploy) monitorSync(ctx context.Context, state *config.State) error {
 		rpcURL = defaultRPCURL
 	}
 
-	syncCtx, cancel := context.WithTimeout(ctx, syncTimeout)
+	// Wait for the node RPC to become reachable (up to 90s),
+	// then check sync status briefly — don't block for full sync.
+	waitCtx, cancel := context.WithTimeout(ctx, syncStartupTimeout)
 	defer cancel()
 
-	sp := ui.NewSpinner("Waiting for blockchain to sync...")
+	sp := ui.NewSpinner("Waiting for node RPC to become available...")
 	sp.Start()
 
-	err := docker.WaitForSync(syncCtx, rpcURL, syncPollInterval, func(s *docker.SyncStatus) {
+	var lastStatus *docker.SyncProgress
+	docker.WaitForSync(waitCtx, rpcURL, syncPollInterval, func(s *docker.SyncProgress) {
+		lastStatus = s
+
+		if s.ConsecutiveFailures > 0 {
+			if s.ConsecutiveFailures >= 12 { // 60s+
+				sp.StopWithError("Node appears stuck in restart loop")
+				ui.Warn("The node container may be stuck restarting (upgrade handler missing?)")
+				ui.Detail("Check logs: docker compose logs node --tail 50")
+				ui.Detail("If Cosmovisor upgrade failed, run: gonka-nop repair")
+				cancel() // stop waiting
+				return
+			}
+			sp.UpdateMessage(fmt.Sprintf("Waiting for node RPC... (attempt %d)", s.ConsecutiveFailures))
+			return
+		}
+
+		// RPC is reachable — we got a sync status. Report and move on.
 		if s.CatchingUp {
-			sp.UpdateMessage(fmt.Sprintf("Syncing... block %s (catching up)",
+			sp.StopWithSuccess(fmt.Sprintf("Node is syncing — block %s (catching up)",
 				formatBlockHeight(int(s.LatestBlockHeight))))
 		} else {
-			sp.UpdateMessage(fmt.Sprintf("Synced to block %s",
+			sp.StopWithSuccess(fmt.Sprintf("Node synced — block %s",
 				formatBlockHeight(int(s.LatestBlockHeight))))
 		}
+		cancel() // got status, stop polling
 	})
 
-	if err != nil {
-		sp.StopWithError("Blockchain sync failed or timed out")
-		ui.Warn("Sync did not complete within %s. The node may still be syncing.", syncTimeout)
-		ui.Detail("Check sync status with: gonka-nop status")
-		ui.Detail("You can continue and let it sync in the background")
-
-		proceed, promptErr := ui.Confirm("Continue with deployment anyway?", true)
-		if promptErr != nil {
-			return promptErr
-		}
-		if !proceed {
-			return fmt.Errorf("sync not complete: %w", err)
-		}
-		return nil
-	}
-
-	sp.StopWithSuccess("Blockchain synced")
-
-	// Fetch final status for display
-	finalStatus, fetchErr := docker.FetchSyncStatus(ctx, rpcURL)
-	if fetchErr == nil {
-		ui.Detail("Block height: %s", formatBlockHeight(int(finalStatus.LatestBlockHeight)))
+	if lastStatus == nil || lastStatus.ConsecutiveFailures > 0 {
+		ui.Warn("Could not reach node RPC at %s", rpcURL)
+		ui.Detail("The node may still be starting up. Check with: gonka-nop status")
+	} else if lastStatus.CatchingUp {
+		ui.Info("Sync will continue in the background while we set up the ML node")
+		ui.Detail("Monitor progress with: gonka-nop status")
 	}
 
 	return nil

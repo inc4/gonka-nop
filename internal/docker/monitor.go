@@ -70,16 +70,66 @@ func FetchSyncStatus(ctx context.Context, rpcURL string) (*SyncStatus, error) {
 	}, nil
 }
 
+// SyncProgress extends SyncStatus with diagnostic signals for the caller.
+type SyncProgress struct {
+	SyncStatus
+
+	// ConsecutiveFailures counts sequential RPC connection failures.
+	// High values indicate the node container is down or restarting.
+	ConsecutiveFailures int
+
+	// HeightStuck is true when height hasn't changed for StuckDuration.
+	HeightStuck   bool
+	StuckDuration time.Duration
+
+	// HeightRegressed is true when height dropped (node restarted from scratch).
+	HeightRegressed bool
+	PreviousHeight  int64
+
+	// RPC error from the latest failed poll (empty on success).
+	LastError string
+}
+
 // WaitForSync polls until catching_up=false or context is canceled.
-// Calls progressFn on each poll with current status.
+// Calls progressFn on each poll with current status and diagnostic signals.
 func WaitForSync(ctx context.Context, rpcURL string, interval time.Duration,
-	progressFn func(status *SyncStatus)) error {
+	progressFn func(status *SyncProgress)) error {
+
+	var (
+		consecutiveFailures int
+		lastHeight          int64
+		lastHeightChange    = time.Now()
+	)
+
+	const stuckThreshold = 2 * time.Minute
 
 	for {
 		status, err := FetchSyncStatus(ctx, rpcURL)
-		if err == nil {
+		if err != nil {
+			consecutiveFailures++
 			if progressFn != nil {
-				progressFn(status)
+				progressFn(&SyncProgress{
+					ConsecutiveFailures: consecutiveFailures,
+					LastError:           err.Error(),
+				})
+			}
+		} else {
+			regressed := lastHeight > 0 && status.LatestBlockHeight < lastHeight
+			if status.LatestBlockHeight != lastHeight {
+				lastHeight = status.LatestBlockHeight
+				lastHeightChange = time.Now()
+			}
+			stuckDur := time.Since(lastHeightChange)
+
+			consecutiveFailures = 0
+			if progressFn != nil {
+				progressFn(&SyncProgress{
+					SyncStatus:      *status,
+					HeightRegressed: regressed,
+					PreviousHeight:  lastHeight,
+					HeightStuck:     stuckDur > stuckThreshold,
+					StuckDuration:   stuckDur,
+				})
 			}
 			if !status.CatchingUp {
 				return nil
