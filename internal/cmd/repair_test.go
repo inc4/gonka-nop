@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/inc4/gonka-nop/internal/config"
@@ -644,6 +645,241 @@ func TestRepairPlan(t *testing.T) {
 	}
 	if plan.UpgradeName != "v0.2.10" {
 		t.Errorf("expected UpgradeName=v0.2.10, got %s", plan.UpgradeName)
+	}
+}
+
+func TestParseUpgradeInfoBinaries(t *testing.T) {
+	tests := []struct {
+		name        string
+		info        string
+		wantCount   int
+		wantNode    string // expected node download URL
+		wantAPI     string // expected API download URL
+		wantNodeSHA string
+		wantAPISHA  string
+	}{
+		{
+			name:        "full testnet upgrade-info",
+			info:        `{"binaries":{"linux/amd64":"https://github.com/product-science/race-releases/releases/download/release%2Fv0.2.10-testnet1/inferenced-amd64.zip?checksum=sha256:fb71310427436aebac32813735231882fca420cf0d94b036f8cacd055d0e1c78"},"api_binaries":{"linux/amd64":"https://github.com/product-science/race-releases/releases/download/release%2Fv0.2.10-testnet1/decentralized-api-amd64.zip?checksum=sha256:6fe214f4bb2d831c02ce407682820d95d01e6ae94a33fe9c4617b80e0ca716ce"}}`,
+			wantCount:   2,
+			wantNode:    "https://github.com/product-science/race-releases/releases/download/release%2Fv0.2.10-testnet1/inferenced-amd64.zip",
+			wantAPI:     "https://github.com/product-science/race-releases/releases/download/release%2Fv0.2.10-testnet1/decentralized-api-amd64.zip",
+			wantNodeSHA: "fb71310427436aebac32813735231882fca420cf0d94b036f8cacd055d0e1c78",
+			wantAPISHA:  "6fe214f4bb2d831c02ce407682820d95d01e6ae94a33fe9c4617b80e0ca716ce",
+		},
+		{
+			name:        "mainnet upgrade-info",
+			info:        `{"binaries":{"linux/amd64":"https://github.com/gonka-ai/gonka/releases/download/release%2Fv0.2.10-post1/inferenced-amd64.zip?checksum=sha256:aaaa1111"},"api_binaries":{"linux/amd64":"https://github.com/gonka-ai/gonka/releases/download/release%2Fv0.2.10-post1/decentralized-api-amd64.zip?checksum=sha256:bbbb2222"}}`,
+			wantCount:   2,
+			wantNode:    "https://github.com/gonka-ai/gonka/releases/download/release%2Fv0.2.10-post1/inferenced-amd64.zip",
+			wantNodeSHA: "aaaa1111",
+			wantAPISHA:  "bbbb2222",
+		},
+		{
+			name:        "no checksum in URL",
+			info:        `{"binaries":{"linux/amd64":"https://example.com/inferenced.zip"},"api_binaries":{"linux/amd64":"https://example.com/api.zip"}}`,
+			wantCount:   2,
+			wantNode:    "https://example.com/inferenced.zip",
+			wantNodeSHA: "",
+			wantAPISHA:  "",
+		},
+		{
+			name:        "only node binary",
+			info:        `{"binaries":{"linux/amd64":"https://example.com/inferenced.zip?checksum=sha256:abc123"}}`,
+			wantCount:   1,
+			wantNodeSHA: "abc123",
+		},
+		{
+			name:      "empty info string",
+			info:      "",
+			wantCount: 0,
+		},
+		{
+			name:      "invalid JSON",
+			info:      "{not valid json}",
+			wantCount: 0,
+		},
+		{
+			name:      "empty binaries",
+			info:      `{"binaries":{},"api_binaries":{}}`,
+			wantCount: 0,
+		},
+		{
+			name:      "wrong architecture",
+			info:      `{"binaries":{"linux/arm64":"https://example.com/inferenced.zip"}}`,
+			wantCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assets := parseUpgradeInfoBinaries(tt.info)
+			if len(assets) != tt.wantCount {
+				t.Fatalf("got %d assets, want %d", len(assets), tt.wantCount)
+			}
+
+			if tt.wantCount == 0 {
+				return
+			}
+
+			// Check node binary
+			node := findBinaryAsset(assets, repairNodeAsset)
+			if node == nil {
+				if tt.wantNode != "" {
+					t.Fatal("expected node asset, got nil")
+				}
+			} else {
+				if tt.wantNode != "" && node.DownloadURL != tt.wantNode {
+					t.Errorf("node URL = %q, want %q", node.DownloadURL, tt.wantNode)
+				}
+				if node.SHA256 != tt.wantNodeSHA {
+					t.Errorf("node SHA256 = %q, want %q", node.SHA256, tt.wantNodeSHA)
+				}
+			}
+
+			// Check API binary
+			api := findBinaryAsset(assets, repairAPIAsset)
+			if api != nil && tt.wantAPISHA != "" {
+				if api.SHA256 != tt.wantAPISHA {
+					t.Errorf("API SHA256 = %q, want %q", api.SHA256, tt.wantAPISHA)
+				}
+			}
+		})
+	}
+}
+
+func TestParseUpgradeInfoURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		rawURL  string
+		wantURL string
+		wantSHA string
+	}{
+		{
+			name:    "URL with sha256 checksum",
+			rawURL:  "https://example.com/file.zip?checksum=sha256:abcdef1234567890",
+			wantURL: "https://example.com/file.zip",
+			wantSHA: "abcdef1234567890",
+		},
+		{
+			name:    "URL without checksum",
+			rawURL:  "https://example.com/file.zip",
+			wantURL: "https://example.com/file.zip",
+			wantSHA: "",
+		},
+		{
+			name:    "URL with encoded path",
+			rawURL:  "https://github.com/org/repo/releases/download/release%2Fv0.2.10/file.zip?checksum=sha256:abc123",
+			wantURL: "https://github.com/org/repo/releases/download/release%2Fv0.2.10/file.zip",
+			wantSHA: "abc123",
+		},
+		{
+			name:    "empty URL",
+			rawURL:  "",
+			wantURL: "",
+			wantSHA: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			asset := parseUpgradeInfoURL(tt.rawURL, "test.zip")
+			if asset.DownloadURL != tt.wantURL {
+				t.Errorf("DownloadURL = %q, want %q", asset.DownloadURL, tt.wantURL)
+			}
+			if asset.SHA256 != tt.wantSHA {
+				t.Errorf("SHA256 = %q, want %q", asset.SHA256, tt.wantSHA)
+			}
+			if asset.Name != "test.zip" {
+				t.Errorf("Name = %q, want %q", asset.Name, "test.zip")
+			}
+		})
+	}
+}
+
+func TestCheckUpgradeInfo_ReturnsAssets(t *testing.T) {
+	dir := t.TempDir()
+	state := &config.State{OutputDir: dir}
+
+	// Create the upgrade-info.json with info field
+	dataDir := filepath.Join(dir, ".inference", "data")
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	upgradeInfo := `{
+		"name": "v0.2.10",
+		"height": 119662,
+		"info": "{\"binaries\":{\"linux/amd64\":\"https://github.com/product-science/race-releases/releases/download/release%2Fv0.2.10-testnet1/inferenced-amd64.zip?checksum=sha256:fb71310427436aebac32813735231882fca420cf0d94b036f8cacd055d0e1c78\"},\"api_binaries\":{\"linux/amd64\":\"https://github.com/product-science/race-releases/releases/download/release%2Fv0.2.10-testnet1/decentralized-api-amd64.zip?checksum=sha256:6fe214f4bb2d831c02ce407682820d95d01e6ae94a33fe9c4617b80e0ca716ce\"}}"
+	}`
+
+	infoPath := filepath.Join(dataDir, "upgrade-info.json")
+	if err := os.WriteFile(infoPath, []byte(upgradeInfo), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Use an unreachable admin URL (we don't need it for this test)
+	diag, assets := checkUpgradeInfo(t.Context(), state, "http://127.0.0.1:1")
+
+	if diag == nil {
+		t.Fatal("expected diagnosis, got nil")
+	}
+	if diag.UpgradeName != "v0.2.10" {
+		t.Errorf("UpgradeName = %q, want %q", diag.UpgradeName, "v0.2.10")
+	}
+
+	if len(assets) != 2 {
+		t.Fatalf("expected 2 assets, got %d", len(assets))
+	}
+
+	node := findBinaryAsset(assets, repairNodeAsset)
+	if node == nil {
+		t.Fatal("expected node asset")
+	}
+	if node.SHA256 != "fb71310427436aebac32813735231882fca420cf0d94b036f8cacd055d0e1c78" {
+		t.Errorf("node SHA256 = %q", node.SHA256)
+	}
+	if !strings.Contains(node.DownloadURL, "product-science/race-releases") {
+		t.Errorf("node URL should point to race-releases repo: %s", node.DownloadURL)
+	}
+
+	api := findBinaryAsset(assets, repairAPIAsset)
+	if api == nil {
+		t.Fatal("expected API asset")
+	}
+	if api.SHA256 != "6fe214f4bb2d831c02ce407682820d95d01e6ae94a33fe9c4617b80e0ca716ce" {
+		t.Errorf("API SHA256 = %q", api.SHA256)
+	}
+}
+
+func TestCheckUpgradeInfo_NoInfoField(t *testing.T) {
+	dir := t.TempDir()
+	state := &config.State{OutputDir: dir}
+
+	dataDir := filepath.Join(dir, ".inference", "data")
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	// upgrade-info.json without info field (older format)
+	upgradeInfo := `{"name": "v0.2.10", "height": 119662}`
+	infoPath := filepath.Join(dataDir, "upgrade-info.json")
+	if err := os.WriteFile(infoPath, []byte(upgradeInfo), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	diag, assets := checkUpgradeInfo(t.Context(), state, "http://127.0.0.1:1")
+
+	if diag == nil {
+		t.Fatal("expected diagnosis, got nil")
+	}
+	if diag.UpgradeName != "v0.2.10" {
+		t.Errorf("UpgradeName = %q, want %q", diag.UpgradeName, "v0.2.10")
+	}
+
+	// No info field → no assets (will fall back to GitHub search)
+	if len(assets) != 0 {
+		t.Errorf("expected 0 assets for missing info field, got %d", len(assets))
 	}
 }
 

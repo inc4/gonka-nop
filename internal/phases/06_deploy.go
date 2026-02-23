@@ -17,10 +17,10 @@ const (
 	pullTimeout        = 30 * time.Minute
 	syncStartupTimeout = 90 * time.Second
 	syncPollInterval   = 5 * time.Second
-	modelLoadTimeout  = 15 * time.Minute
-	modelPollInterval = 10 * time.Second
-	cmdSudo           = "sudo"
-	cmdDocker         = "docker"
+	modelLoadTimeout   = 15 * time.Minute
+	modelPollInterval  = 10 * time.Second
+	cmdSudo            = "sudo"
+	cmdDocker          = "docker"
 )
 
 // Deploy starts the Docker containers with security hardening
@@ -388,7 +388,6 @@ func (p *Deploy) runHealthChecks(ctx context.Context, state *config.State) error
 
 	return nil
 }
-
 
 func (p *Deploy) showSummary(state *config.State) {
 	ui.Header("Deployment Summary")

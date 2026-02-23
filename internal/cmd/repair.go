@@ -88,9 +88,10 @@ type Diagnosis struct {
 
 // RepairPlan holds the diagnosis results and repair strategy.
 type RepairPlan struct {
-	Diagnoses   []Diagnosis
-	UpgradeName string // from logs or admin API
-	NeedsBinary bool   // whether binary download is required
+	Diagnoses         []Diagnosis
+	UpgradeName       string         // from logs or admin API
+	NeedsBinary       bool           // whether binary download is required
+	UpgradeInfoAssets []ReleaseAsset // from upgrade-info.json info field (on-chain source of truth)
 }
 
 // ReleaseAsset holds a downloadable binary from a GitHub release.
@@ -175,14 +176,15 @@ func diagnoseNode(ctx context.Context, state *config.State) *RepairPlan {
 		}
 	}
 
-	// 2. Check for stale upgrade-info.json
-	staleInfo := checkUpgradeInfo(ctx, state, resolveRepairAdmin(state))
+	// 2. Check for stale upgrade-info.json and extract binary URLs
+	staleInfo, infoAssets := checkUpgradeInfo(ctx, state, resolveRepairAdmin(state))
 	if staleInfo != nil {
 		plan.Diagnoses = append(plan.Diagnoses, *staleInfo)
 		if plan.UpgradeName == "" && staleInfo.UpgradeName != "" {
 			plan.UpgradeName = staleInfo.UpgradeName
 		}
 	}
+	plan.UpgradeInfoAssets = infoAssets
 
 	// 3. Check Cosmovisor symlinks
 	symlinkDiags := checkCosmovisorSymlinks(state)
@@ -226,25 +228,77 @@ func parseUpgradeHandlerError(logOutput string) string {
 type upgradeInfoJSON struct {
 	Name   string `json:"name"`
 	Height int64  `json:"height"`
+	Info   string `json:"info"` // nested JSON with binary download URLs
+}
+
+// upgradeInfoBinaries represents the parsed content of the upgrade-info.json "info" field.
+type upgradeInfoBinaries struct {
+	Binaries    map[string]string `json:"binaries"`
+	APIBinaries map[string]string `json:"api_binaries"`
+}
+
+// parseUpgradeInfoBinaries parses the nested JSON in upgrade-info.json's "info" field
+// and extracts binary download URLs with SHA256 checksums.
+// Returns nil if the info field is empty or unparseable.
+func parseUpgradeInfoBinaries(info string) []ReleaseAsset {
+	if info == "" {
+		return nil
+	}
+
+	var bins upgradeInfoBinaries
+	if err := json.Unmarshal([]byte(info), &bins); err != nil {
+		return nil
+	}
+
+	var assets []ReleaseAsset
+
+	if rawURL, ok := bins.Binaries["linux/amd64"]; ok && rawURL != "" {
+		assets = append(assets, parseUpgradeInfoURL(rawURL, repairNodeAsset))
+	}
+
+	if rawURL, ok := bins.APIBinaries["linux/amd64"]; ok && rawURL != "" {
+		assets = append(assets, parseUpgradeInfoURL(rawURL, repairAPIAsset))
+	}
+
+	return assets
+}
+
+// parseUpgradeInfoURL parses a Cosmovisor binary URL with optional checksum query parameter.
+// Format: https://example.com/file.zip?checksum=sha256:<hex>
+func parseUpgradeInfoURL(rawURL, assetName string) ReleaseAsset {
+	asset := ReleaseAsset{Name: assetName}
+
+	parts := strings.SplitN(rawURL, "?checksum=", 2)
+	asset.DownloadURL = parts[0]
+
+	if len(parts) == 2 {
+		asset.SHA256 = parseDigest(parts[1])
+	}
+
+	return asset
 }
 
 // checkUpgradeInfo checks if upgrade-info.json exists and is stale.
-func checkUpgradeInfo(ctx context.Context, state *config.State, adminURL string) *Diagnosis {
+// Also parses the "info" field for binary download URLs (on-chain source of truth).
+func checkUpgradeInfo(ctx context.Context, state *config.State, adminURL string) (*Diagnosis, []ReleaseAsset) {
 	infoPath := filepath.Join(state.OutputDir, ".inference", "data", "upgrade-info.json")
 
 	data, err := readFileOptionalSudo(ctx, state, infoPath)
 	if err != nil {
-		return nil // file doesn't exist or unreadable — not an issue
+		return nil, nil // file doesn't exist or unreadable — not an issue
 	}
 
 	var info upgradeInfoJSON
 	if jsonErr := json.Unmarshal(data, &info); jsonErr != nil {
-		return nil // malformed file — not actionable
+		return nil, nil // malformed file — not actionable
 	}
 
 	if info.Name == "" {
-		return nil
+		return nil, nil
 	}
+
+	// Parse binary URLs from the info field (on-chain source of truth)
+	infoAssets := parseUpgradeInfoBinaries(info.Info)
 
 	// Try to get current height to determine if upgrade is stale
 	heightDesc := ""
@@ -253,13 +307,15 @@ func checkUpgradeInfo(ctx context.Context, state *config.State, adminURL string)
 		heightDesc = fmt.Sprintf(" (upgrade height %d, current height %d)", info.Height, currentHeight)
 	}
 
-	return &Diagnosis{
+	diag := &Diagnosis{
 		ID:          "stale_upgrade_info",
 		Severity:    "warning",
 		Description: fmt.Sprintf("upgrade-info.json exists for %s%s", info.Name, heightDesc),
 		FixAction:   "Remove .inference/data/upgrade-info.json",
 		UpgradeName: info.Name,
 	}
+
+	return diag, infoAssets
 }
 
 // fetchCurrentHeight tries to get the current block height from Admin API config.
@@ -351,7 +407,11 @@ func displayDiagnosis(plan *RepairPlan) {
 	}
 
 	if plan.NeedsBinary && plan.UpgradeName != "" {
-		ui.Info("Binaries will be downloaded from: github.com/gonka-ai/gonka/releases")
+		if len(plan.UpgradeInfoAssets) > 0 {
+			ui.Info("Binaries will be downloaded from URLs in upgrade-info.json (on-chain source of truth)")
+		} else {
+			ui.Info("Binaries will be downloaded from: github.com/gonka-ai/gonka/releases")
+		}
 	}
 }
 
@@ -368,7 +428,7 @@ func executeRepair(ctx context.Context, state *config.State, plan *RepairPlan) e
 
 	// Download and place binaries if needed
 	if plan.NeedsBinary && plan.UpgradeName != "" {
-		if err := downloadAndPlaceBinaries(ctx, state, plan.UpgradeName); err != nil {
+		if err := downloadAndPlaceBinaries(ctx, state, plan); err != nil {
 			return fmt.Errorf("binary download/placement failed: %w", err)
 		}
 	}
@@ -404,13 +464,27 @@ func executeRepair(ctx context.Context, state *config.State, plan *RepairPlan) e
 	return nil
 }
 
-// downloadAndPlaceBinaries downloads upgrade binaries from GitHub and places them
-// in the correct Cosmovisor directories.
-func downloadAndPlaceBinaries(ctx context.Context, state *config.State, upgradeName string) error {
-	// Fetch release info from GitHub
-	assets, err := fetchReleaseAssets(ctx, upgradeName)
-	if err != nil {
-		return fmt.Errorf("fetch release info: %w", err)
+// downloadAndPlaceBinaries downloads upgrade binaries and places them
+// in the correct Cosmovisor directories. Prefers URLs from upgrade-info.json
+// (on-chain source of truth) over GitHub release search.
+func downloadAndPlaceBinaries(ctx context.Context, state *config.State, plan *RepairPlan) error {
+	upgradeName := plan.UpgradeName
+
+	// Prefer upgrade-info.json URLs (on-chain source of truth).
+	// These come directly from the governance proposal and point to the correct
+	// repo/tag for the network (mainnet vs testnet).
+	var assets []ReleaseAsset
+	if len(plan.UpgradeInfoAssets) > 0 {
+		ui.Info("Using binary URLs from upgrade-info.json (on-chain source of truth)")
+		assets = plan.UpgradeInfoAssets
+	} else {
+		// Fall back to GitHub release search (searches gonka-ai/gonka only)
+		ui.Info("No binary URLs in upgrade-info.json, searching GitHub releases...")
+		var err error
+		assets, err = fetchReleaseAssets(ctx, upgradeName)
+		if err != nil {
+			return fmt.Errorf("fetch release info: %w", err)
+		}
 	}
 
 	// Download and place each binary
