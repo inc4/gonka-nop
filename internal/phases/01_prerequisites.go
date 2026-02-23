@@ -47,10 +47,14 @@ func (p *Prerequisites) Run(ctx context.Context, state *config.State) error {
 
 	// 2. Detect sudo early — other phases (deploy, installs) need this
 	if !p.mocked {
-		if docker.DetectSudo(ctx) {
+		dockerNeedsSudo := docker.DetectSudo(ctx)
+		ui.Info("[DEBUG] uid=%d, docker.DetectSudo=%v, state.UseSudo(before)=%v",
+			os.Getuid(), dockerNeedsSudo, state.UseSudo)
+		if dockerNeedsSudo {
 			state.UseSudo = true
 			ui.Info("Docker requires sudo — commands will use 'sudo -E'")
 		}
+		ui.Info("[DEBUG] state.UseSudo(after)=%v", state.UseSudo)
 	}
 
 	// 3. Check Docker → offer install if missing

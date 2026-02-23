@@ -3,6 +3,7 @@ package phases
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -29,7 +30,11 @@ func runSudoCmd(ctx context.Context, useSudo bool, name string, args ...string) 
 	} else {
 		cmd = exec.CommandContext(cmdCtx, name, args...) // #nosec G204
 	}
+	fmt.Fprintf(os.Stderr, "[DEBUG runSudoCmd] useSudo=%v uid=%d cmd=%v\n", useSudo, os.Getuid(), cmd.Args)
 	out, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[DEBUG runSudoCmd] ERROR: %v\n[DEBUG runSudoCmd] OUTPUT: %s\n", err, string(out))
+	}
 	return string(out), err
 }
 
@@ -43,7 +48,11 @@ func runSudoShell(ctx context.Context, useSudo bool, shellCmd string) (string, e
 	} else {
 		cmd = exec.CommandContext(cmdCtx, "sh", "-c", shellCmd) // #nosec G204
 	}
+	fmt.Fprintf(os.Stderr, "[DEBUG runSudoShell] useSudo=%v uid=%d cmd=%v\n", useSudo, os.Getuid(), cmd.Args)
 	out, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[DEBUG runSudoShell] ERROR: %v\n[DEBUG runSudoShell] OUTPUT: %s\n", err, string(out))
+	}
 	return string(out), err
 }
 
@@ -70,6 +79,7 @@ func checkKernelHeaders(ctx context.Context) bool {
 
 // installKernelHeaders installs kernel headers for the running kernel.
 func installKernelHeaders(ctx context.Context, useSudo bool) error {
+	useSudo = installNeedsSudo(useSudo)
 	out, err := runCmd(ctx, "uname", "-r")
 	if err != nil {
 		return fmt.Errorf("could not detect kernel version: %w", err)
@@ -88,8 +98,16 @@ func installKernelHeaders(ctx context.Context, useSudo bool) error {
 	return nil
 }
 
+// installNeedsSudo returns true if installation commands need sudo.
+// Package management (apt-get, dpkg, systemctl) always requires root,
+// regardless of Docker group membership.
+func installNeedsSudo(useSudo bool) bool {
+	return useSudo || os.Getuid() != 0
+}
+
 // installDocker installs Docker Engine on Debian/Ubuntu systems.
 func installDocker(ctx context.Context, distro config.Distro, useSudo bool) error {
+	useSudo = installNeedsSudo(useSudo)
 	if distro.Family != "debian" {
 		return fmt.Errorf("Docker auto-install only supported on Debian/Ubuntu (detected: %s)", distro.ID)
 	}
@@ -163,6 +181,7 @@ func installDocker(ctx context.Context, distro config.Distro, useSudo bool) erro
 
 // installNVIDIADriver installs the NVIDIA driver on Debian/Ubuntu systems.
 func installNVIDIADriver(ctx context.Context, distro config.Distro, useSudo bool) error {
+	useSudo = installNeedsSudo(useSudo)
 	if distro.Family != "debian" {
 		return fmt.Errorf("NVIDIA driver auto-install only supported on Debian/Ubuntu (detected: %s)", distro.ID)
 	}
@@ -196,8 +215,10 @@ func installNVIDIADriver(ctx context.Context, distro config.Distro, useSudo bool
 	}{
 		{"Adding NVIDIA CUDA repository", func() error {
 			keyURL := fmt.Sprintf("%s/%s/x86_64/cuda-keyring_1.1-1_all.deb", nvidiaRepoBase, repoDistro)
+			// Pre-clean: remove leftover file from previous failed attempt.
+			// fs.protected_regular=2 blocks overwriting files owned by other users in /tmp.
 			_, err := runSudoShell(ctx, useSudo,
-				fmt.Sprintf("curl -fsSL -o /tmp/cuda-keyring.deb %s && dpkg -i /tmp/cuda-keyring.deb && rm -f /tmp/cuda-keyring.deb", keyURL))
+				fmt.Sprintf("rm -f /tmp/cuda-keyring.deb && curl -fsSL -o /tmp/cuda-keyring.deb %s && dpkg -i /tmp/cuda-keyring.deb && rm -f /tmp/cuda-keyring.deb", keyURL))
 			return err
 		}},
 		{"Installing " + nvidiaDriver, func() error {
@@ -235,6 +256,7 @@ func installNVIDIADriver(ctx context.Context, distro config.Distro, useSudo bool
 
 // installContainerToolkit installs the NVIDIA Container Toolkit and configures Docker.
 func installContainerToolkit(ctx context.Context, distro config.Distro, useSudo bool) error {
+	useSudo = installNeedsSudo(useSudo)
 	if distro.Family != "debian" {
 		return fmt.Errorf("Container Toolkit auto-install only supported on Debian/Ubuntu (detected: %s)", distro.ID)
 	}
@@ -297,6 +319,7 @@ func installContainerToolkit(ctx context.Context, distro config.Distro, useSudo 
 
 // installFabricManager installs nvidia-fabricmanager for multi-GPU NVLink setups.
 func installFabricManager(ctx context.Context, driverVersion string, useSudo bool) error {
+	useSudo = installNeedsSudo(useSudo)
 	major := DriverMajorVersion(driverVersion)
 	if major == "" {
 		return fmt.Errorf("could not determine driver major version from %q", driverVersion)
