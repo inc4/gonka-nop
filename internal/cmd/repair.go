@@ -438,43 +438,22 @@ func executeRepair(ctx context.Context, state *config.State, plan *RepairPlan) e
 		}
 	}
 
-	// Handle upgrade-info.json:
-	// - If missing_upgrade_handler: ENSURE it exists (cosmovisor needs it to switch)
-	// - If stale_upgrade_info only: remove it
-	hasMissingHandler := false
+	// Remove stale upgrade-info.json (only when node is NOT missing handler)
 	for _, d := range plan.Diagnoses {
-		if d.ID == "missing_upgrade_handler" {
-			hasMissingHandler = true
-			break
-		}
-	}
-
-	if hasMissingHandler && plan.UpgradeName != "" {
-		// Cosmovisor needs upgrade-info.json to know it should switch
-		// from genesis binary to the upgrade binary.
-		if err := ensureUpgradeInfo(ctx, state, plan.UpgradeName); err != nil {
-			ui.Warn("Could not ensure upgrade-info.json: %v", err)
-		}
-	} else {
-		for _, d := range plan.Diagnoses {
-			if d.ID == "stale_upgrade_info" {
-				if err := removeUpgradeInfo(ctx, state); err != nil {
-					ui.Warn("Could not remove upgrade-info.json: %v", err)
-				} else {
-					ui.Success("Removed stale upgrade-info.json")
-				}
+		if d.ID == "stale_upgrade_info" {
+			if err := removeUpgradeInfo(ctx, state); err != nil {
+				ui.Warn("Could not remove upgrade-info.json: %v", err)
+			} else {
+				ui.Success("Removed stale upgrade-info.json")
 			}
 		}
 	}
 
-	// Fix Cosmovisor symlinks only when explicitly broken.
-	// Cosmovisor manages the "current" symlink itself via upgrade-info.json;
-	// overriding it externally breaks the container init script.
-	for _, d := range plan.Diagnoses {
-		if d.ID == "broken_symlink" && plan.UpgradeName != "" {
-			fixSymlinks(ctx, state, plan.UpgradeName)
-			break
-		}
+	// Fix Cosmovisor symlinks: point "current" to upgrade directory when
+	// binaries are confirmed in place. This makes cosmovisor run the
+	// upgrade binary directly, bypassing the need for upgrade-info.json.
+	if plan.UpgradeName != "" {
+		fixSymlinks(ctx, state, plan.UpgradeName)
 	}
 
 	// Start node container
@@ -925,46 +904,6 @@ func copyFile(src, dst string) error {
 	return err
 }
 
-// ensureUpgradeInfo creates .inference/data/upgrade-info.json if it does not
-// exist. Cosmovisor reads this file after the genesis binary exits to decide
-// whether to switch to an upgrade binary. Without it, cosmovisor keeps
-// restarting the genesis binary which lacks the upgrade handler.
-func ensureUpgradeInfo(ctx context.Context, state *config.State, upgradeName string) error {
-	infoPath := filepath.Join(state.OutputDir, ".inference", "data", "upgrade-info.json")
-
-	// Check if it already exists with the correct name
-	if data, err := readFileOptionalSudo(ctx, state, infoPath); err == nil {
-		var info upgradeInfoJSON
-		if json.Unmarshal(data, &info) == nil && info.Name == upgradeName {
-			ui.Detail("upgrade-info.json already exists for %s", upgradeName)
-			return nil
-		}
-	}
-
-	// Write to temp file, then move (may need sudo)
-	content := fmt.Sprintf(`{"name":"%s","height":0}`, upgradeName)
-	tmpFile, err := os.CreateTemp("", "upgrade-info-*.json")
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
-	}
-	if _, wErr := tmpFile.WriteString(content); wErr != nil {
-		_ = tmpFile.Close()
-		_ = os.Remove(tmpFile.Name())
-		return fmt.Errorf("write temp file: %w", wErr)
-	}
-	_ = tmpFile.Close()
-
-	tmpPath := tmpFile.Name()
-	if err := runHostCmd(ctx, state.UseSudo, state.OutputDir,
-		fmt.Sprintf("mv %s %s", shellQuote(tmpPath), shellQuote(infoPath))); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("move upgrade-info.json: %w", err)
-	}
-
-	ui.Success("Created upgrade-info.json for %s", upgradeName)
-	return nil
-}
-
 // removeUpgradeInfo removes the stale upgrade-info.json file.
 func removeUpgradeInfo(ctx context.Context, state *config.State) error {
 	infoPath := filepath.Join(state.OutputDir, ".inference", "data", "upgrade-info.json")
@@ -986,9 +925,18 @@ func fixSymlinks(ctx context.Context, state *config.State, upgradeName string) {
 		cosmoDir := filepath.Join(state.OutputDir, svc.dir, "cosmovisor")
 		upgradeDir := filepath.Join(cosmoDir, "upgrades", upgradeName)
 
-		// Check if upgrade directory exists
-		if _, err := os.Stat(upgradeDir); os.IsNotExist(err) {
-			continue
+		// Skip if upgrade directory definitely does not exist.
+		// Use sudo test when direct stat fails with permission error
+		// (cosmovisor dirs are root-owned from Docker).
+		if _, err := os.Stat(upgradeDir); err != nil {
+			if !os.IsPermission(err) {
+				continue // genuinely missing
+			}
+			// Permission denied — try sudo test
+			if testErr := runHostCmd(ctx, state.UseSudo, state.OutputDir,
+				fmt.Sprintf("test -d %s", shellQuote(upgradeDir))); testErr != nil {
+				continue // doesn't exist even with sudo
+			}
 		}
 
 		symlinkPath := filepath.Join(cosmoDir, "current")
