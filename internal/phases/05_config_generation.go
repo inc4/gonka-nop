@@ -12,12 +12,28 @@ import (
 )
 
 const (
-	defaultModel            = "Qwen/QwQ-32B"
+	// DefaultModel is the fallback model when GPU VRAM is insufficient for larger models.
+	DefaultModel = "Qwen/QwQ-32B"
+	// DefaultHFHome is the default HuggingFace cache directory.
+	DefaultHFHome = "/mnt/shared/huggingface"
+	// DefaultMLNodeImage is the base image for the ML node container.
+	DefaultMLNodeImage = "ghcr.io/product-science/mlnode"
+	// DefaultMLNodeImageTag is the default tag for the ML node image.
+	DefaultMLNodeImageTag = "3.0.12"
+
+	defaultModel            = DefaultModel
 	defaultAttentionBackend = "FLASH_ATTN"
-	defaultMLNodeImageTag   = "3.0.12"
+	defaultMLNodeImageTag   = DefaultMLNodeImageTag
 	kvCacheDtypeAuto        = "auto"
-	defaultHFHome           = "/mnt/shared/huggingface"
+	defaultHFHome           = DefaultHFHome
 )
+
+// SupportedModels lists the models supported by the Gonka network.
+var SupportedModels = []string{
+	"Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
+	"Qwen/QwQ-32B",
+	"Qwen/Qwen3-32B-FP8",
+}
 
 // ConfigGeneration generates configuration files
 type ConfigGeneration struct{}
@@ -270,7 +286,7 @@ func generateConfigEnv(state *config.State) error {
 	}
 	seedRPCURL := state.SeedRPCURL
 	if seedRPCURL == "" {
-		seedRPCURL = "http://node2.gonka.ai:26657"
+		seedRPCURL = "http://node2.gonka.ai:8000/chain-rpc/"
 	}
 	seedP2PURL := state.SeedP2PURL
 	if seedP2PURL == "" {

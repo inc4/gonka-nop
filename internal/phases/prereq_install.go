@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	aptTimeout     = 5 * time.Minute
+	aptTimeout     = 15 * time.Minute
 	nvidiaDriver   = "nvidia-driver-570"
 	nvidiaRepoBase = "https://developer.download.nvidia.com/compute/cuda/repos"
 	nctRepoBase    = "https://nvidia.github.io/libnvidia-container"

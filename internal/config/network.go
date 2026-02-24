@@ -22,7 +22,7 @@ func MainnetConfig() NetworkConfig {
 	return NetworkConfig{
 		ChainID:         "gonka-mainnet",
 		SeedAPIURL:      "http://node2.gonka.ai:8000",
-		SeedRPCURL:      "http://node2.gonka.ai:26657",
+		SeedRPCURL:      "http://node2.gonka.ai:8000/chain-rpc/",
 		SeedP2PURL:      "tcp://node2.gonka.ai:5000",
 		PersistentPeers: MainnetPersistentPeers(),
 		IsTestNet:       false,

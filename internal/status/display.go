@@ -54,9 +54,15 @@ func printOverview(s *NodeStatus) {
 		}
 	}
 
-	// Containers — inferred from API checks, not direct docker access
+	// Containers — inferred from API checks and RPC, not direct docker access
 	if s.Overview.ContainersRunning >= 5 {
 		printOK("Core services: Running (node, api, mlnode verified)")
+	} else if s.Overview.ContainersRunning >= 3 {
+		if s.Blockchain.CatchingUp {
+			printWarn("Core services: Node syncing (API may not be fully ready)")
+		} else {
+			printWarn("Core services: %d/%d verified", s.Overview.ContainersRunning, s.Overview.ContainersTotal)
+		}
 	} else if s.Overview.ContainersRunning > 0 {
 		printWarn("Core services: %d/%d verified", s.Overview.ContainersRunning, s.Overview.ContainersTotal)
 	} else {

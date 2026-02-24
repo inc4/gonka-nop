@@ -6,10 +6,29 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	"github.com/inc4/gonka-nop/internal/config"
 )
+
+// upgradeHandlerRe matches the Cosmovisor upgrade handler panic message in node logs.
+var upgradeHandlerRe = regexp.MustCompile(
+	`upgrade handler is missing for (\S+) upgrade plan`)
+
+// CheckUpgradeHandlerError checks node container logs for upgrade handler errors.
+// Returns the upgrade name if found, empty string otherwise.
+func CheckUpgradeHandlerError(ctx context.Context, cc *ComposeClient) string {
+	logs, err := cc.Logs(ctx, "node", 100)
+	if err != nil {
+		return ""
+	}
+	matches := upgradeHandlerRe.FindAllStringSubmatch(logs, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	return matches[len(matches)-1][1]
+}
 
 // ComposeClient wraps Docker Compose CLI operations.
 type ComposeClient struct {

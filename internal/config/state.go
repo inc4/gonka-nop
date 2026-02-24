@@ -68,7 +68,7 @@ type State struct {
 	ColdKeyName     string `json:"cold_key_name,omitempty"`
 	ColdKeyAddress  string `json:"cold_key_address,omitempty"`
 	WarmKeyAddress  string `json:"warm_key_address,omitempty"`
-	KeyringPassword string `json:"-"` // never persisted
+	KeyringPassword string `json:"keyring_password,omitempty"`
 	KeyringDir      string `json:"keyring_dir,omitempty"`
 
 	// GPU Configuration

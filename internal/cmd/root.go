@@ -60,6 +60,7 @@ func init() {
 	rootCmd.AddCommand(cleanupCmd)
 	rootCmd.AddCommand(mlNodeCmd)
 	rootCmd.AddCommand(repairCmd)
+	rootCmd.AddCommand(downloadModelCmd)
 }
 
 // Execute runs the root command

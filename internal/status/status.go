@@ -730,9 +730,12 @@ func fetchMLNodeStatus(status *NodeStatus, cfg *StatusConfig) {
 }
 
 func fetchOverviewStatus(status *NodeStatus) {
-	// Infer container health from setup/report checks
+	// Infer container health from multiple sources
+	confirmed := 0
+
+	// Admin API reachable → api container is running
 	if status.SetupReport != nil {
-		confirmed := 1 // API is running (we got the report)
+		confirmed++ // API is running (we got the report)
 		for _, check := range status.SetupReport.Checks {
 			switch {
 			case check.ID == "block_sync" && check.Status == StatusPass:
@@ -741,9 +744,15 @@ func fetchOverviewStatus(status *NodeStatus) {
 				confirmed += 2 // mlnode + inference (nginx)
 			}
 		}
-		status.Overview.ContainersRunning = confirmed
-		status.Overview.ContainersTotal = 8
 	}
+
+	// Tendermint RPC reachable → node + tmkms are running (even if not synced)
+	if confirmed < 3 && (status.Blockchain.BlockHeight > 0 || status.Blockchain.PeerCountKnown || status.Blockchain.CatchingUp) {
+		confirmed = max(confirmed, 3) // node + tmkms + at least partially up
+	}
+
+	status.Overview.ContainersRunning = confirmed
+	status.Overview.ContainersTotal = 8
 }
 
 // FetchMockedStatus returns mocked status for demo with full validator details

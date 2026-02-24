@@ -69,10 +69,13 @@ func ExtractMnemonic(stderr string) string {
 // CreateKeyViaDocker creates a key by running inferenced inside a Docker container.
 // Returns the parsed key output and the mnemonic phrase.
 func CreateKeyViaDocker(ctx context.Context, imageRef, keyName, password, keyringDir string, useSudo bool) (*KeyOutput, string, error) {
-	// Build the shell command to pipe:
-	// "y" for override prompt (if key exists), then password 3 times (new, confirm, unlock)
+	// Build the shell command to pipe the password.
+	// inferenced keys add prompts for: passphrase (new/unlock), confirm, then unlock-to-display.
+	// We pipe password 3 times to cover all prompts.
+	// The "y" override prompt only appears if the key already exists — we handle that
+	// via the --yes flag (available in newer SDK) or by pre-deleting if needed.
 	shellCmd := fmt.Sprintf(
-		`printf 'y\n%s\n%s\n%s\n' | inferenced keys add %s --keyring-backend file --keyring-dir /root/.inference --output json`,
+		`printf '%s\n%s\n%s\n' | inferenced keys add %s --keyring-backend file --keyring-dir /root/.inference --output json`,
 		password, password, password, keyName,
 	)
 

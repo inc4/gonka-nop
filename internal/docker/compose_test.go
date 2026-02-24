@@ -104,3 +104,45 @@ func TestNewComposeClient_EmptyOutputDir(t *testing.T) {
 		t.Error("expected error for empty output dir, got nil")
 	}
 }
+
+func TestUpgradeHandlerRe(t *testing.T) {
+	tests := []struct {
+		name string
+		logs string
+		want string
+	}{
+		{
+			name: "upgrade handler missing",
+			logs: `node | error during handshake: error on replay: wrong app version 0, upgrade handler is missing for v0.2.8 upgrade plan`,
+			want: "v0.2.8",
+		},
+		{
+			name: "multiple occurrences returns last",
+			logs: "upgrade handler is missing for v0.2.6 upgrade plan\nupgrade handler is missing for v0.2.8 upgrade plan",
+			want: "v0.2.8",
+		},
+		{
+			name: "no match",
+			logs: "node started successfully\nblock 12345 committed",
+			want: "",
+		},
+		{
+			name: "empty logs",
+			logs: "",
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matches := upgradeHandlerRe.FindAllStringSubmatch(tt.logs, -1)
+			got := ""
+			if len(matches) > 0 {
+				got = matches[len(matches)-1][1]
+			}
+			if got != tt.want {
+				t.Errorf("upgradeHandlerRe match = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
