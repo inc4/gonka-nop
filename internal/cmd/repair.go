@@ -438,13 +438,31 @@ func executeRepair(ctx context.Context, state *config.State, plan *RepairPlan) e
 		}
 	}
 
-	// Remove stale upgrade-info.json
+	// Handle upgrade-info.json:
+	// - If missing_upgrade_handler: ENSURE it exists (cosmovisor needs it to switch)
+	// - If stale_upgrade_info only: remove it
+	hasMissingHandler := false
 	for _, d := range plan.Diagnoses {
-		if d.ID == "stale_upgrade_info" {
-			if err := removeUpgradeInfo(ctx, state); err != nil {
-				ui.Warn("Could not remove upgrade-info.json: %v", err)
-			} else {
-				ui.Success("Removed stale upgrade-info.json")
+		if d.ID == "missing_upgrade_handler" {
+			hasMissingHandler = true
+			break
+		}
+	}
+
+	if hasMissingHandler && plan.UpgradeName != "" {
+		// Cosmovisor needs upgrade-info.json to know it should switch
+		// from genesis binary to the upgrade binary.
+		if err := ensureUpgradeInfo(ctx, state, plan.UpgradeName); err != nil {
+			ui.Warn("Could not ensure upgrade-info.json: %v", err)
+		}
+	} else {
+		for _, d := range plan.Diagnoses {
+			if d.ID == "stale_upgrade_info" {
+				if err := removeUpgradeInfo(ctx, state); err != nil {
+					ui.Warn("Could not remove upgrade-info.json: %v", err)
+				} else {
+					ui.Success("Removed stale upgrade-info.json")
+				}
 			}
 		}
 	}
@@ -905,6 +923,46 @@ func copyFile(src, dst string) error {
 
 	_, err = io.Copy(out, in)
 	return err
+}
+
+// ensureUpgradeInfo creates .inference/data/upgrade-info.json if it does not
+// exist. Cosmovisor reads this file after the genesis binary exits to decide
+// whether to switch to an upgrade binary. Without it, cosmovisor keeps
+// restarting the genesis binary which lacks the upgrade handler.
+func ensureUpgradeInfo(ctx context.Context, state *config.State, upgradeName string) error {
+	infoPath := filepath.Join(state.OutputDir, ".inference", "data", "upgrade-info.json")
+
+	// Check if it already exists with the correct name
+	if data, err := readFileOptionalSudo(ctx, state, infoPath); err == nil {
+		var info upgradeInfoJSON
+		if json.Unmarshal(data, &info) == nil && info.Name == upgradeName {
+			ui.Detail("upgrade-info.json already exists for %s", upgradeName)
+			return nil
+		}
+	}
+
+	// Write to temp file, then move (may need sudo)
+	content := fmt.Sprintf(`{"name":"%s","height":0}`, upgradeName)
+	tmpFile, err := os.CreateTemp("", "upgrade-info-*.json")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	if _, wErr := tmpFile.WriteString(content); wErr != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpFile.Name())
+		return fmt.Errorf("write temp file: %w", wErr)
+	}
+	_ = tmpFile.Close()
+
+	tmpPath := tmpFile.Name()
+	if err := runHostCmd(ctx, state.UseSudo, state.OutputDir,
+		fmt.Sprintf("mv %s %s", shellQuote(tmpPath), shellQuote(infoPath))); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("move upgrade-info.json: %w", err)
+	}
+
+	ui.Success("Created upgrade-info.json for %s", upgradeName)
+	return nil
 }
 
 // removeUpgradeInfo removes the stale upgrade-info.json file.
