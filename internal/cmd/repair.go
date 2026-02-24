@@ -447,10 +447,14 @@ func executeRepair(ctx context.Context, state *config.State, plan *RepairPlan) e
 		}
 	}
 
-	// Fix Cosmovisor symlinks: always update when we placed new binaries
-	// (symlink may point to "genesis" — valid but wrong after upgrade)
-	if plan.UpgradeName != "" {
-		fixSymlinks(ctx, state, plan.UpgradeName)
+	// Fix Cosmovisor symlinks only when explicitly broken.
+	// Cosmovisor manages the "current" symlink itself via upgrade-info.json;
+	// overriding it externally breaks the container init script.
+	for _, d := range plan.Diagnoses {
+		if d.ID == "broken_symlink" && plan.UpgradeName != "" {
+			fixSymlinks(ctx, state, plan.UpgradeName)
+			break
+		}
 	}
 
 	// Start node container
