@@ -335,25 +335,40 @@ func TestVerifySHA256(t *testing.T) {
 
 func TestUpgradeNameToReleaseTags(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    string
-		expected []string
+		name      string
+		input     string
+		isTestnet bool
+		expected  []string
 	}{
 		{
-			name:     "simple version",
-			input:    "v0.2.10",
-			expected: []string{"release/v0.2.10", "release/v0.2.10-post1"},
+			name:      "mainnet simple version",
+			input:     "v0.2.10",
+			isTestnet: false,
+			expected:  []string{"release/v0.2.10", "release/v0.2.10-post1"},
 		},
 		{
-			name:     "post suffix already",
-			input:    "v0.2.8-post1",
-			expected: []string{"release/v0.2.8-post1", "release/v0.2.8-post1-post1"},
+			name:      "mainnet post suffix already",
+			input:     "v0.2.8-post1",
+			isTestnet: false,
+			expected:  []string{"release/v0.2.8-post1", "release/v0.2.8-post1-post1"},
+		},
+		{
+			name:      "testnet simple version",
+			input:     "v0.2.10",
+			isTestnet: true,
+			expected:  []string{"v0.2.10", "release/v0.2.10-testnet1", "v0.2.10-test"},
+		},
+		{
+			name:      "testnet with suffix",
+			input:     "v0.2.8-post1",
+			isTestnet: true,
+			expected:  []string{"v0.2.8-post1", "release/v0.2.8-post1-testnet1", "v0.2.8-post1-test"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := upgradeNameToReleaseTags(tt.input)
+			got := upgradeNameToReleaseTags(tt.input, tt.isTestnet)
 			if len(got) != len(tt.expected) {
 				t.Fatalf("got %d tags, want %d", len(got), len(tt.expected))
 			}
@@ -884,10 +899,11 @@ func TestCheckUpgradeInfo_NoInfoField(t *testing.T) {
 }
 
 func TestBuildDirectDownloadAssets(t *testing.T) {
-	// Save and restore global constant (use a test server)
-	origBase := repairGHDirectDownload
+	// Save and restore getRepairRepoURLs
+	origFn := getRepairRepoURLs
+	defer func() { getRepairRepoURLs = origFn }()
 
-	t.Run("valid release returns two assets", func(t *testing.T) {
+	t.Run("mainnet valid release returns two assets", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodHead {
 				// Simulate GitHub 302 redirect for valid assets
@@ -898,11 +914,15 @@ func TestBuildDirectDownloadAssets(t *testing.T) {
 		}))
 		defer ts.Close()
 
-		// Point direct download at test server
-		repairGHDirectDownload = ts.URL + "/"
-		defer func() { repairGHDirectDownload = origBase }()
+		getRepairRepoURLs = func(_ bool) repairRepoURLs {
+			return repairRepoURLs{
+				apiTagBase:   ts.URL + "/releases/tags/",
+				apiListURL:   ts.URL + "/releases",
+				directDLBase: ts.URL + "/",
+			}
+		}
 
-		assets, err := buildDirectDownloadAssets(t.Context(), "v0.2.10")
+		assets, err := buildDirectDownloadAssets(t.Context(), "v0.2.10", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -921,18 +941,95 @@ func TestBuildDirectDownloadAssets(t *testing.T) {
 		}
 	})
 
+	t.Run("testnet valid release returns two assets", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodHead {
+				w.WriteHeader(http.StatusFound)
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer ts.Close()
+
+		getRepairRepoURLs = func(_ bool) repairRepoURLs {
+			return repairRepoURLs{
+				apiTagBase:   ts.URL + "/releases/tags/",
+				apiListURL:   ts.URL + "/releases",
+				directDLBase: ts.URL + "/",
+			}
+		}
+
+		assets, err := buildDirectDownloadAssets(t.Context(), "v0.2.10", true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(assets) != 2 {
+			t.Fatalf("expected 2 assets, got %d", len(assets))
+		}
+	})
+
 	t.Run("404 returns error", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 		}))
 		defer ts.Close()
 
-		repairGHDirectDownload = ts.URL + "/"
-		defer func() { repairGHDirectDownload = origBase }()
+		getRepairRepoURLs = func(_ bool) repairRepoURLs {
+			return repairRepoURLs{
+				apiTagBase:   ts.URL + "/releases/tags/",
+				apiListURL:   ts.URL + "/releases",
+				directDLBase: ts.URL + "/",
+			}
+		}
 
-		_, err := buildDirectDownloadAssets(t.Context(), "v99.99.99")
+		_, err := buildDirectDownloadAssets(t.Context(), "v99.99.99", false)
 		if err == nil {
 			t.Error("expected error for missing release")
+		}
+	})
+}
+
+func TestGetRepairRepoURLs(t *testing.T) {
+	t.Run("mainnet uses gonka-ai/gonka", func(t *testing.T) {
+		urls := getRepairRepoURLs(false)
+		if !strings.Contains(urls.apiTagBase, mainnetGHRepo) {
+			t.Errorf("apiTagBase = %q, want to contain %q", urls.apiTagBase, mainnetGHRepo)
+		}
+		if !strings.Contains(urls.apiListURL, mainnetGHRepo) {
+			t.Errorf("apiListURL = %q, want to contain %q", urls.apiListURL, mainnetGHRepo)
+		}
+		if !strings.Contains(urls.directDLBase, mainnetGHRepo) {
+			t.Errorf("directDLBase = %q, want to contain %q", urls.directDLBase, mainnetGHRepo)
+		}
+	})
+
+	t.Run("testnet uses product-science/race-releases", func(t *testing.T) {
+		urls := getRepairRepoURLs(true)
+		if !strings.Contains(urls.apiTagBase, testnetGHRepo) {
+			t.Errorf("apiTagBase = %q, want to contain %q", urls.apiTagBase, testnetGHRepo)
+		}
+		if !strings.Contains(urls.apiListURL, testnetGHRepo) {
+			t.Errorf("apiListURL = %q, want to contain %q", urls.apiListURL, testnetGHRepo)
+		}
+		if !strings.Contains(urls.directDLBase, testnetGHRepo) {
+			t.Errorf("directDLBase = %q, want to contain %q", urls.directDLBase, testnetGHRepo)
+		}
+	})
+}
+
+func TestRepairNeedsSudo(t *testing.T) {
+	t.Run("useSudo already true", func(t *testing.T) {
+		if !repairNeedsSudo(true) {
+			t.Error("expected true when useSudo is already true")
+		}
+	})
+
+	t.Run("non-root user needs sudo", func(t *testing.T) {
+		// This test runs as a regular user in CI, so UID != 0
+		if os.Getuid() != 0 {
+			if !repairNeedsSudo(false) {
+				t.Error("expected true for non-root user with useSudo=false")
+			}
 		}
 	})
 }
