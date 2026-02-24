@@ -117,6 +117,9 @@ func runRepair(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("no deployment found in %s — run 'gonka-nop setup' first", outputDir)
 	}
 
+	// Cosmovisor dirs are created by Docker as root. Non-root users need sudo.
+	state.UseSudo = repairNeedsSudo(state.UseSudo)
+
 	// Diagnose
 	ui.Info("Diagnosing node...")
 	plan := diagnoseNode(ctx, state)
@@ -1095,6 +1098,14 @@ func readFileOptionalSudo(ctx context.Context, state *config.State, path string)
 // shellQuote wraps a path in single quotes for shell safety.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+// repairNeedsSudo returns true if repair filesystem operations need sudo.
+// Docker containers create cosmovisor directories as root inside bind-mounted
+// volumes, so any non-root user needs sudo to write to them regardless of
+// Docker group membership.
+func repairNeedsSudo(useSudo bool) bool {
+	return useSudo || os.Getuid() != 0
 }
 
 // resolveRepairAdmin returns the admin URL from flag, state, or default.
