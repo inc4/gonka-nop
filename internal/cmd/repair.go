@@ -172,9 +172,11 @@ func diagnoseNode(ctx context.Context, state *config.State) *RepairPlan {
 		})
 		plan.UpgradeName = upgradeName
 
-		// Check if binary already exists
+		// Check if binary already exists.
+		// Use any stat error (not just IsNotExist) because cosmovisor dirs
+		// are root-owned (created by Docker) and non-root gets EACCES.
 		nodeBin := filepath.Join(state.OutputDir, ".inference", "cosmovisor", "upgrades", upgradeName, "bin", "inferenced")
-		if _, statErr := os.Stat(nodeBin); os.IsNotExist(statErr) {
+		if _, statErr := os.Stat(nodeBin); statErr != nil {
 			plan.NeedsBinary = true
 		}
 	}
