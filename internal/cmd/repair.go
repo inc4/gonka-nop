@@ -24,8 +24,6 @@ import (
 )
 
 const (
-	repairGHAPIBase       = "https://api.github.com/repos/gonka-ai/gonka/releases/tags/"
-	repairGHListReleases  = "https://api.github.com/repos/gonka-ai/gonka/releases"
 	repairHTTPTimeout     = 30 * time.Second
 	repairDownloadTimeout = 10 * time.Minute
 	repairNodeAsset       = "inferenced-amd64.zip"
@@ -33,10 +31,32 @@ const (
 	repairRecoveryPoll    = 5 * time.Second
 	repairRecoveryTimeout = 30 * time.Second
 	defaultAdminURL       = "http://localhost:9200"
+
+	mainnetGHRepo  = "gonka-ai/gonka"
+	testnetGHRepo  = "product-science/race-releases"
+	ghAPIRepoBase  = "https://api.github.com/repos/"
+	ghDownloadBase = "https://github.com/"
 )
 
-// repairGHDirectDownload is a var (not const) for test overriding.
-var repairGHDirectDownload = "https://github.com/gonka-ai/gonka/releases/download/"
+// repairRepoURLs returns GitHub API and download URLs for the correct repo.
+type repairRepoURLs struct {
+	apiTagBase   string // e.g. https://api.github.com/repos/<owner>/<repo>/releases/tags/
+	apiListURL   string // e.g. https://api.github.com/repos/<owner>/<repo>/releases
+	directDLBase string // e.g. https://github.com/<owner>/<repo>/releases/download/
+}
+
+// getRepairRepoURLs returns repo URLs based on network. Var for test overriding.
+var getRepairRepoURLs = func(isTestnet bool) repairRepoURLs {
+	repo := mainnetGHRepo
+	if isTestnet {
+		repo = testnetGHRepo
+	}
+	return repairRepoURLs{
+		apiTagBase:   ghAPIRepoBase + repo + "/releases/tags/",
+		apiListURL:   ghAPIRepoBase + repo + "/releases",
+		directDLBase: ghDownloadBase + repo + "/releases/download/",
+	}
+}
 
 var repairCmd = &cobra.Command{
 	Use:   "repair",
@@ -415,7 +435,7 @@ func displayDiagnosis(plan *RepairPlan) {
 		if len(plan.UpgradeInfoAssets) > 0 {
 			ui.Info("Binaries will be downloaded from URLs in upgrade-info.json (on-chain source of truth)")
 		} else {
-			ui.Info("Binaries will be downloaded from: github.com/gonka-ai/gonka/releases")
+			ui.Info("Binaries will be downloaded from GitHub releases")
 		}
 	}
 }
@@ -484,10 +504,10 @@ func downloadAndPlaceBinaries(ctx context.Context, state *config.State, plan *Re
 		ui.Info("Using binary URLs from upgrade-info.json (on-chain source of truth)")
 		assets = plan.UpgradeInfoAssets
 	} else {
-		// Fall back to GitHub release search (searches gonka-ai/gonka only)
+		// Fall back to GitHub release search (network-aware repo selection)
 		ui.Info("No binary URLs in upgrade-info.json, searching GitHub releases...")
 		var err error
-		assets, err = fetchReleaseAssets(ctx, upgradeName)
+		assets, err = fetchReleaseAssets(ctx, upgradeName, state.IsTestNet)
 		if err != nil {
 			return fmt.Errorf("fetch release info: %w", err)
 		}
@@ -553,23 +573,21 @@ func downloadAndPlaceBinaries(ctx context.Context, state *config.State, plan *Re
 }
 
 // fetchReleaseAssets queries GitHub API for release assets matching the upgrade name.
+// Uses the correct repo based on network (mainnet: gonka-ai/gonka, testnet: product-science/race-releases).
 // Falls back to direct download URLs if the GitHub API is unreachable.
-func fetchReleaseAssets(ctx context.Context, upgradeName string) ([]ReleaseAsset, error) {
-	// Try exact tag match first: release/{upgradeName}
-	releaseTag := "release/" + upgradeName
-	assets, err := fetchReleaseByTag(ctx, releaseTag)
-	if err == nil {
-		return assets, nil
-	}
+func fetchReleaseAssets(ctx context.Context, upgradeName string, isTestnet bool) ([]ReleaseAsset, error) {
+	urls := getRepairRepoURLs(isTestnet)
 
-	// Try with -post1 suffix
-	assets, err = fetchReleaseByTag(ctx, releaseTag+"-post1")
-	if err == nil {
-		return assets, nil
+	// Try candidate tags for this network
+	for _, tag := range upgradeNameToReleaseTags(upgradeName, isTestnet) {
+		assets, err := fetchReleaseByTag(ctx, tag, urls.apiTagBase)
+		if err == nil {
+			return assets, nil
+		}
 	}
 
 	// Try listing recent releases and find best match
-	assets, listErr := fetchReleaseBestMatch(ctx, upgradeName)
+	assets, listErr := fetchReleaseBestMatch(ctx, upgradeName, urls.apiListURL)
 	if listErr == nil {
 		return assets, nil
 	}
@@ -577,7 +595,7 @@ func fetchReleaseAssets(ctx context.Context, upgradeName string) ([]ReleaseAsset
 	// Fallback: construct direct download URLs without API (works when api.github.com
 	// is blocked but github.com is reachable)
 	ui.Warn("GitHub API unreachable, trying direct download URLs...")
-	return buildDirectDownloadAssets(ctx, upgradeName)
+	return buildDirectDownloadAssets(ctx, upgradeName, isTestnet)
 }
 
 // ghReleaseResp maps the GitHub API release response.
@@ -595,11 +613,12 @@ type ghReleaseAsset struct {
 }
 
 // fetchReleaseByTag fetches a specific release by tag.
-func fetchReleaseByTag(ctx context.Context, tag string) ([]ReleaseAsset, error) {
+// apiTagBase is the GitHub API URL prefix (e.g. "https://api.github.com/repos/owner/repo/releases/tags/").
+func fetchReleaseByTag(ctx context.Context, tag, apiTagBase string) ([]ReleaseAsset, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, repairHTTPTimeout)
 	defer cancel()
 
-	url := repairGHAPIBase + tag
+	url := apiTagBase + tag
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -656,11 +675,12 @@ func parseDigest(digest string) string {
 }
 
 // fetchReleaseBestMatch lists recent releases and finds the best match.
-func fetchReleaseBestMatch(ctx context.Context, upgradeName string) ([]ReleaseAsset, error) {
+// listURL is the GitHub API releases list URL (e.g. "https://api.github.com/repos/owner/repo/releases").
+func fetchReleaseBestMatch(ctx context.Context, upgradeName, listURL string) ([]ReleaseAsset, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, repairHTTPTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, repairGHListReleases+"?per_page=10", nil)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, listURL+"?per_page=10", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -711,8 +731,9 @@ func fetchReleaseBestMatch(ctx context.Context, upgradeName string) ([]ReleaseAs
 // buildDirectDownloadAssets constructs download URLs without the GitHub API.
 // Used when api.github.com is unreachable but github.com works.
 // Tries candidate tag patterns and verifies via HEAD request.
-func buildDirectDownloadAssets(ctx context.Context, upgradeName string) ([]ReleaseAsset, error) {
-	candidates := upgradeNameToReleaseTags(upgradeName)
+func buildDirectDownloadAssets(ctx context.Context, upgradeName string, isTestnet bool) ([]ReleaseAsset, error) {
+	candidates := upgradeNameToReleaseTags(upgradeName, isTestnet)
+	urls := getRepairRepoURLs(isTestnet)
 
 	client := &http.Client{
 		Timeout: repairHTTPTimeout,
@@ -724,7 +745,7 @@ func buildDirectDownloadAssets(ctx context.Context, upgradeName string) ([]Relea
 	for _, tag := range candidates {
 		// GitHub encodes "/" as "%2F" in download URLs
 		encodedTag := strings.ReplaceAll(tag, "/", "%2F")
-		baseURL := repairGHDirectDownload + encodedTag + "/"
+		baseURL := urls.directDLBase + encodedTag + "/"
 
 		// Verify the release exists by checking one asset with HEAD
 		testURL := baseURL + repairNodeAsset
@@ -1132,7 +1153,16 @@ func resolveRepairAdmin(state *config.State) string {
 }
 
 // upgradeNameToReleaseTags returns candidate GitHub release tags for an upgrade name.
-func upgradeNameToReleaseTags(name string) []string {
+// Mainnet (gonka-ai/gonka): "release/v0.2.10", "release/v0.2.10-post1"
+// Testnet (product-science/race-releases): "v0.2.10", "release/v0.2.10-testnet1", "v0.2.10-test"
+func upgradeNameToReleaseTags(name string, isTestnet bool) []string {
+	if isTestnet {
+		return []string{
+			name,                            // e.g. "v0.2.10"
+			"release/" + name + "-testnet1", // e.g. "release/v0.2.10-testnet1"
+			name + "-test",                  // e.g. "v0.2.10-test"
+		}
+	}
 	return []string{
 		"release/" + name,
 		"release/" + name + "-post1",
