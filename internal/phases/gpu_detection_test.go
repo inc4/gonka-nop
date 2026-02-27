@@ -78,7 +78,7 @@ func TestRecommendConfig(t *testing.T) {
 			vramMB:         81920,
 			arch:           "sm_90",
 			hasNVLink:      true,
-			wantTP:         8,
+			wantTP:         4,
 			wantPP:         1,
 			wantModel:      "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
 			wantMemUtil:    0.90,
@@ -92,11 +92,11 @@ func TestRecommendConfig(t *testing.T) {
 			arch:           "sm_90",
 			hasNVLink:      false,
 			wantTP:         4,
-			wantPP:         2,
+			wantPP:         1,
 			wantModel:      "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
 			wantMemUtil:    0.90,
 			wantKVCache:    kvCacheDtypeAuto,
-			wantMaxModelLe: 131072,
+			wantMaxModelLe: 240000,
 		},
 		{
 			name:           "8x A100 40GB (320GB) — tight VRAM needs fp8 KV cache",
@@ -104,7 +104,7 @@ func TestRecommendConfig(t *testing.T) {
 			vramMB:         40960,
 			arch:           "sm_80",
 			hasNVLink:      true,
-			wantTP:         8,
+			wantTP:         4,
 			wantPP:         1,
 			wantModel:      "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
 			wantMemUtil:    0.90,
@@ -231,9 +231,9 @@ func TestSelectAttentionBackend(t *testing.T) {
 		arch string
 		want string
 	}{
-		{"sm_80", "FLASH_ATTN"},
-		{"sm_89", "FLASH_ATTN"},
-		{"sm_90", "FLASH_ATTN"},
+		{"sm_80", "FLASHINFER"},
+		{"sm_89", "FLASHINFER"},
+		{"sm_90", "FLASHINFER"},
 		{"sm_100", "FLASHINFER"},
 		{"sm_120", "FLASHINFER"},
 	}

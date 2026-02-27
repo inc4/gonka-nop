@@ -309,8 +309,8 @@ func (p *Deploy) startMLNode(ctx context.Context, state *config.State) error {
 		ui.Detail("ML node: %s", gpuSummary)
 	}
 	if state.TPSize > 0 {
-		ui.Detail("TP=%d, PP=%d, Memory Util=%.2f, Max Model Len=%d",
-			state.TPSize, state.PPSize, state.GPUMemoryUtil, state.MaxModelLen)
+		ui.Detail("TP=%d, Memory Util=%.2f, Max Model Len=%d (PP auto-calculated by runner)",
+			state.TPSize, state.GPUMemoryUtil, state.MaxModelLen)
 	}
 	if state.KVCacheDtype != "" && state.KVCacheDtype != kvCacheDtypeAuto {
 		ui.Detail("KV Cache Dtype: %s (memory optimization)", state.KVCacheDtype)

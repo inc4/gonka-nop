@@ -25,7 +25,7 @@ func TestBuildVLLMArgs(t *testing.T) {
 		wantArgs []string
 	}{
 		{
-			name: "Default state (non-FP8 model, no quantization)",
+			name: "Default state (non-FP8 model)",
 			state: func() *config.State {
 				s := config.NewState("/tmp/test")
 				s.SelectedModel = nonFP8Model
@@ -36,14 +36,13 @@ func TestBuildVLLMArgs(t *testing.T) {
 			},
 		},
 		{
-			name: "FP8 model gets quantization flag",
+			name: "FP8 model — no quantization flag (runner uses dtype=float16)",
 			state: func() *config.State {
 				s := config.NewState("/tmp/test")
 				s.SelectedModel = fp8Model
 				return s
 			}(),
 			wantArgs: []string{
-				"--quantization", kvCacheDtypeFP8,
 				"--gpu-memory-utilization", "0.90",
 			},
 		},
@@ -57,13 +56,12 @@ func TestBuildVLLMArgs(t *testing.T) {
 				return s
 			}(),
 			wantArgs: []string{
-				"--quantization", kvCacheDtypeFP8,
 				"--gpu-memory-utilization", "0.92",
 				"--tensor-parallel-size", "4",
 			},
 		},
 		{
-			name: "PP > 1 with non-FP8 model",
+			name: "PP is ignored (runner auto-calculates)",
 			state: func() *config.State {
 				s := config.NewState("/tmp/test")
 				s.SelectedModel = nonFP8Model
@@ -73,7 +71,6 @@ func TestBuildVLLMArgs(t *testing.T) {
 			}(),
 			wantArgs: []string{
 				"--gpu-memory-utilization", "0.88",
-				"--pipeline-parallel-size", "2",
 			},
 		},
 		{
@@ -81,22 +78,21 @@ func TestBuildVLLMArgs(t *testing.T) {
 			state: func() *config.State {
 				s := config.NewState("/tmp/test")
 				s.SelectedModel = fp8Model
-				s.TPSize = 8
+				s.TPSize = 4
 				s.GPUMemoryUtil = 0.90
 				s.MaxModelLen = 240000
 				s.KVCacheDtype = kvCacheDtypeFP8
 				return s
 			}(),
 			wantArgs: []string{
-				"--quantization", kvCacheDtypeFP8,
 				"--gpu-memory-utilization", "0.90",
-				"--tensor-parallel-size", "8",
+				"--tensor-parallel-size", "4",
 				"--max-model-len", "240000",
 				"--kv-cache-dtype", kvCacheDtypeFP8,
 			},
 		},
 		{
-			name: "All args combined with FP8 model",
+			name: "All args combined with FP8 model (no quantization, no PP)",
 			state: func() *config.State {
 				s := config.NewState("/tmp/test")
 				s.SelectedModel = fp8Model
@@ -108,10 +104,8 @@ func TestBuildVLLMArgs(t *testing.T) {
 				return s
 			}(),
 			wantArgs: []string{
-				"--quantization", kvCacheDtypeFP8,
 				"--gpu-memory-utilization", "0.90",
 				"--tensor-parallel-size", "4",
-				"--pipeline-parallel-size", "2",
 				"--max-model-len", "131072",
 				"--kv-cache-dtype", kvCacheDtypeFP8,
 			},
@@ -126,12 +120,11 @@ func TestBuildVLLMArgs(t *testing.T) {
 				return s
 			}(),
 			wantArgs: []string{
-				"--quantization", kvCacheDtypeFP8,
 				"--gpu-memory-utilization", "0.92",
 			},
 		},
 		{
-			name: "Testnet model (non-FP8) has no quantization",
+			name: "Testnet model (non-FP8)",
 			state: func() *config.State {
 				s := config.NewState("/tmp/test")
 				s.SelectedModel = "Qwen/Qwen3-4B-Instruct-2507"
@@ -242,7 +235,7 @@ func TestGenerateConfigEnv(t *testing.T) {
 	state.APIPort = 8000
 	state.HFHome = "/mnt/hf"
 	state.SelectedModel = defaultModel
-	state.AttentionBackend = "FLASH_ATTN"
+	state.AttentionBackend = defaultAttentionBackend
 
 	if err := generateConfigEnv(state); err != nil {
 		t.Fatalf("generateConfigEnv() error: %v", err)
@@ -266,7 +259,7 @@ func TestGenerateConfigEnv(t *testing.T) {
 		{"API_SSL_PORT", "API_SSL_PORT=8443"},
 		{"HF_HOME", "HF_HOME=/mnt/hf"},
 		{"MODEL_NAME", "MODEL_NAME=" + defaultModel},
-		{"VLLM_ATTENTION_BACKEND", "VLLM_ATTENTION_BACKEND=FLASH_ATTN"},
+		{"VLLM_ATTENTION_BACKEND", "VLLM_ATTENTION_BACKEND=FLASHINFER"},
 		{"DDoS blocked routes", "GONKA_API_BLOCKED_ROUTES='poc-batches training'"},
 		{"DDoS exempt routes", "GONKA_API_EXEMPT_ROUTES='chat inference'"},
 		{"DISABLE_CHAIN_API", "DISABLE_CHAIN_API=true"},
@@ -587,7 +580,7 @@ func TestGenerateMLNodeCompose(t *testing.T) {
 	state := config.NewState(tmpDir)
 	state.SelectedModel = "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
 	state.MLNodeImageTag = mlnodeBlackwellTag
-	state.AttentionBackend = "FLASHINFER"
+	state.AttentionBackend = defaultAttentionBackend
 	state.HFHome = defaultHFHome
 
 	if err := generateMLNodeCompose(state); err != nil {

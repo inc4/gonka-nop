@@ -90,7 +90,7 @@ func (p *Prerequisites) Run(ctx context.Context, state *config.State) error {
 
 	// 10-12. System checks
 	p.checkAutoUpdates(ctx, state)
-	p.checkDiskSpace(ctx, state)
+	p.checkStorageLayout(ctx, state)
 	p.checkPorts(state)
 
 	ui.Success("All prerequisites satisfied")
@@ -405,31 +405,189 @@ func (p *Prerequisites) checkAutoUpdates(ctx context.Context, state *config.Stat
 	}
 }
 
-func (p *Prerequisites) checkDiskSpace(ctx context.Context, state *config.State) {
+const minUnmountedDriveGB = 500
+
+func (p *Prerequisites) checkStorageLayout(ctx context.Context, state *config.State) {
 	if p.mocked {
-		state.DiskFreeGB = 512
-		ui.Success("Disk space: %d GB free (250 GB minimum for Cosmovisor upgrades)", state.DiskFreeGB)
+		state.DiskFreeGB = 3500
+		ui.Success("Storage: /dev/nvme1n1 (3.5 TB) mounted at %s", state.OutputDir)
 		return
 	}
-	var freeGB int
-	err := ui.WithSpinner("Checking available disk space", func() error {
-		out, cmdErr := runCmd(ctx, "df", "--output=avail", "-BG", state.OutputDir)
-		if cmdErr != nil {
-			return cmdErr
-		}
-		gb, parseErr := ParseDiskFreeGB(out)
-		if parseErr != nil {
-			return parseErr
-		}
-		freeGB = gb
-		return nil
-	})
-	if err != nil {
-		ui.Warn("Could not check disk space: %v", err)
-		return
-	}
+
+	ui.Header("Storage Validation")
+
+	// 1. Get disk free space on deploy dir
+	freeGB := p.getDiskFreeGB(ctx, state.OutputDir)
 	state.DiskFreeGB = freeGB
 
+	// 2. Check which device backs the deploy dir and root
+	deploySource := p.getDeviceForPath(ctx, state.OutputDir)
+	rootSource := p.getDeviceForPath(ctx, "/")
+	onRoot := deploySource != "" && rootSource != "" && deploySource == rootSource
+
+	// 3. Get block device layout
+	devices, lsblkErr := p.getLsblkDevices(ctx)
+	if lsblkErr != nil {
+		// Can't detect storage layout — fall back to simple disk space check
+		p.reportDiskSpace(state, freeGB)
+		return
+	}
+
+	// 4. Find unmounted drives
+	unmounted := FindUnmountedDrives(devices, minUnmountedDriveGB)
+
+	// 5. Show storage summary
+	if deploySource != "" {
+		ui.Detail("Deploy directory: %s (on %s, %d GB free)", state.OutputDir, deploySource, freeGB)
+	}
+
+	// 6. Decision logic
+	if onRoot && len(unmounted) > 0 {
+		ui.Warn("Deploy directory is on root filesystem (%d GB free). Blockchain data can grow to 500GB+.", freeGB)
+		ui.Info("Found %d unmounted drive(s) that could be used:", len(unmounted))
+		for i, d := range unmounted {
+			ui.Detail("  [%d] /dev/%s (%s, unmounted)", i+1, d.Name, FormatDriveSize(d.Size))
+		}
+
+		// In non-interactive mode, warn but don't offer to format
+		if ui.IsNonInteractive() {
+			ui.Warn("Deploy directory is on root filesystem. Use --output-dir on a dedicated mount for production.")
+			return
+		}
+
+		// Offer to mount
+		if err := p.offerMountDrive(ctx, state, unmounted); err != nil {
+			ui.Warn("Drive mount failed: %v", err)
+		} else {
+			// Re-check disk space after mount
+			freeGB = p.getDiskFreeGB(ctx, state.OutputDir)
+			state.DiskFreeGB = freeGB
+		}
+	} else if onRoot {
+		// On root, but no unmounted drives — just warn if space is low
+		p.reportDiskSpace(state, freeGB)
+	} else {
+		// Deploy dir is on a separate mount — good
+		p.reportDiskSpace(state, freeGB)
+	}
+}
+
+func (p *Prerequisites) offerMountDrive(ctx context.Context, state *config.State, drives []BlockDevice) error {
+	mount, err := ui.Confirm("Mount a drive to the deploy directory?", true)
+	if err != nil || !mount {
+		ui.Info("Continuing with current storage layout")
+		return nil
+	}
+
+	// Select drive
+	var selectedIdx int
+	if len(drives) == 1 {
+		selectedIdx = 0
+	} else {
+		options := make([]string, len(drives))
+		for i, d := range drives {
+			options[i] = fmt.Sprintf("/dev/%s (%s)", d.Name, FormatDriveSize(d.Size))
+		}
+		selected, selErr := ui.Select("Select drive to mount:", options)
+		if selErr != nil {
+			return selErr
+		}
+		for i, opt := range options {
+			if opt == selected {
+				selectedIdx = i
+				break
+			}
+		}
+	}
+
+	drive := drives[selectedIdx]
+	devPath := "/dev/" + drive.Name
+	hasFstype := drive.Fstype != nil && *drive.Fstype != ""
+
+	// Extra warning if drive has existing filesystem
+	if hasFstype {
+		ui.Warn("Drive %s has existing filesystem (%s)", devPath, *drive.Fstype)
+	}
+
+	// Double confirmation — must type 'yes'
+	ui.Warn("This will FORMAT %s as ext4 — ALL DATA ON THIS DRIVE WILL BE LOST", devPath)
+	typed, inputErr := ui.Input("Type 'yes' to confirm:", "")
+	if inputErr != nil {
+		return inputErr
+	}
+	if strings.ToLower(strings.TrimSpace(typed)) != "yes" {
+		ui.Info("Skipping drive format")
+		return nil
+	}
+
+	// Format
+	sp := ui.NewSpinner(fmt.Sprintf("Formatting %s as ext4...", devPath))
+	sp.Start()
+	_, fmtErr := runSudoCmd(ctx, state.UseSudo, "mkfs.ext4", "-L", "gonka-data", devPath)
+	if fmtErr != nil {
+		sp.StopWithError("Format failed")
+		return fmt.Errorf("mkfs.ext4 %s: %w", devPath, fmtErr)
+	}
+	sp.StopWithSuccess(fmt.Sprintf("Formatted %s as ext4", devPath))
+
+	// Create mount point and mount
+	_, _ = runSudoCmd(ctx, state.UseSudo, "mkdir", "-p", state.OutputDir)
+
+	sp = ui.NewSpinner(fmt.Sprintf("Mounting %s at %s...", devPath, state.OutputDir))
+	sp.Start()
+	_, mountErr := runSudoCmd(ctx, state.UseSudo, "mount", devPath, state.OutputDir)
+	if mountErr != nil {
+		sp.StopWithError("Mount failed")
+		return fmt.Errorf("mount %s: %w", devPath, mountErr)
+	}
+	sp.StopWithSuccess(fmt.Sprintf("Mounted %s at %s", devPath, state.OutputDir))
+
+	// Add to fstab for persistence
+	fstabLine := fmt.Sprintf("%s %s ext4 defaults 0 2\n", devPath, state.OutputDir)
+	_, fstabErr := runSudoCmd(ctx, state.UseSudo, "sh", "-c",
+		fmt.Sprintf("echo '%s' >> /etc/fstab", fstabLine))
+	if fstabErr != nil {
+		ui.Warn("Could not update /etc/fstab: %v — mount will not persist after reboot", fstabErr)
+	} else {
+		ui.Success("Added %s to /etc/fstab for persistence", devPath)
+	}
+
+	return nil
+}
+
+func (p *Prerequisites) getDiskFreeGB(ctx context.Context, path string) int {
+	out, err := runCmd(ctx, "df", "--output=avail", "-BG", path)
+	if err != nil {
+		return 0
+	}
+	gb, parseErr := ParseDiskFreeGB(out)
+	if parseErr != nil {
+		return 0
+	}
+	return gb
+}
+
+func (p *Prerequisites) getDeviceForPath(ctx context.Context, path string) string {
+	out, err := runCmd(ctx, "df", "--output=source", path)
+	if err != nil {
+		return ""
+	}
+	source, parseErr := ParseDfSource(out)
+	if parseErr != nil {
+		return ""
+	}
+	return source
+}
+
+func (p *Prerequisites) getLsblkDevices(ctx context.Context) ([]BlockDevice, error) {
+	out, err := runCmd(ctx, "lsblk", "-J", "-b", "-o", "NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE")
+	if err != nil {
+		return nil, fmt.Errorf("lsblk: %w", err)
+	}
+	return ParseLsblkJSON(out)
+}
+
+func (p *Prerequisites) reportDiskSpace(state *config.State, freeGB int) {
 	minDisk := 250
 	if state.IsTestNet {
 		minDisk = 133

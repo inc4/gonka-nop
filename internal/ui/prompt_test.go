@@ -9,7 +9,7 @@ func TestResetOverrides(t *testing.T) {
 	SetOverride("test", "value")
 	ResetOverrides()
 
-	if isNonInteractive() {
+	if IsNonInteractive() {
 		t.Error("expected non-interactive to be false after reset")
 	}
 	if _, ok := findOverride("test prompt"); ok {

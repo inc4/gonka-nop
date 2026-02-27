@@ -52,8 +52,8 @@ func findOverride(message string) (string, bool) {
 	return "", false
 }
 
-// isNonInteractive returns whether non-interactive mode is enabled.
-func isNonInteractive() bool {
+// IsNonInteractive returns whether non-interactive mode is enabled.
+func IsNonInteractive() bool {
 	mu.RLock()
 	defer mu.RUnlock()
 	return nonInteractive
@@ -77,7 +77,7 @@ func Select(message string, options []string) (string, error) {
 		}
 		return "", fmt.Errorf("override value %q does not match any option: %v", val, options)
 	}
-	if isNonInteractive() {
+	if IsNonInteractive() {
 		if len(options) > 0 {
 			return options[0], nil
 		}
@@ -95,7 +95,7 @@ func Select(message string, options []string) (string, error) {
 
 // Confirm prompts user for yes/no confirmation
 func Confirm(message string, defaultVal bool) (bool, error) {
-	if isNonInteractive() {
+	if IsNonInteractive() {
 		return defaultVal, nil
 	}
 
@@ -113,7 +113,7 @@ func Input(message string, defaultVal string) (string, error) {
 	if val, ok := findOverride(message); ok {
 		return val, nil
 	}
-	if isNonInteractive() {
+	if IsNonInteractive() {
 		if defaultVal != "" {
 			return defaultVal, nil
 		}
@@ -134,7 +134,7 @@ func Password(message string) (string, error) {
 	if val, ok := findOverride(message); ok {
 		return val, nil
 	}
-	if isNonInteractive() {
+	if IsNonInteractive() {
 		return "", fmt.Errorf("password required but not provided via --keyring-password flag: %s", message)
 	}
 
@@ -148,7 +148,7 @@ func Password(message string) (string, error) {
 
 // MultiSelect prompts user to select multiple options
 func MultiSelect(message string, options []string) ([]string, error) {
-	if isNonInteractive() {
+	if IsNonInteractive() {
 		return options, nil
 	}
 

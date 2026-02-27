@@ -22,7 +22,7 @@ const (
 	DefaultMLNodeImageTag = "3.0.12"
 
 	defaultModel            = DefaultModel
-	defaultAttentionBackend = "FLASH_ATTN"
+	defaultAttentionBackend = "FLASHINFER"
 	defaultMLNodeImageTag   = DefaultMLNodeImageTag
 	kvCacheDtypeAuto        = "auto"
 	defaultHFHome           = DefaultHFHome
@@ -484,23 +484,13 @@ func generateNodeConfig(state *config.State) error {
 	return os.WriteFile(filepath.Join(state.OutputDir, "node-config.json"), []byte(content), 0600)
 }
 
-// modelNeedsFP8Quantization returns true if the model name indicates FP8 quantization
-func modelNeedsFP8Quantization(modelName string) bool {
-	return strings.Contains(strings.ToUpper(modelName), "FP8")
-}
-
-// buildVLLMArgs builds the vLLM command-line arguments from state
+// buildVLLMArgs builds the vLLM command-line arguments from state.
+// Note: --quantization fp8 is NOT added even for FP8 models — the mlnode runner
+// uses dtype=float16 which avoids FP8 block_n alignment errors with MoE experts.
+// Note: --pipeline-parallel-size is NOT added — the mlnode runner auto-calculates
+// PP from available GPUs (e.g. 8 GPUs / TP=4 → PP=2).
 func buildVLLMArgs(state *config.State) []string {
 	var args []string
-
-	// Only add --quantization fp8 for FP8 models (e.g., Qwen3-235B-FP8, Qwen3-32B-FP8)
-	modelName := state.SelectedModel
-	if modelName == "" {
-		modelName = defaultModel
-	}
-	if modelNeedsFP8Quantization(modelName) {
-		args = append(args, "--quantization", kvCacheDtypeFP8)
-	}
 
 	// GPU memory utilization (0.88-0.94, not 0.9/0.99)
 	memUtil := state.GPUMemoryUtil
@@ -512,11 +502,6 @@ func buildVLLMArgs(state *config.State) []string {
 	// Tensor parallel size
 	if state.TPSize > 1 {
 		args = append(args, "--tensor-parallel-size", fmt.Sprintf("%d", state.TPSize))
-	}
-
-	// Pipeline parallel size
-	if state.PPSize > 1 {
-		args = append(args, "--pipeline-parallel-size", fmt.Sprintf("%d", state.PPSize))
 	}
 
 	// Max model length

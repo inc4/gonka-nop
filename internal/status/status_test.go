@@ -503,8 +503,8 @@ func TestFetchSetupReport_WithFailures(t *testing.T) {
 	cfg := &StatusConfig{AdminURL: ts.URL}
 	fetchSetupReport(status, cfg)
 
-	if status.Overview.OverallStatus != "FAIL" {
-		t.Errorf("OverallStatus = %q, want %q", status.Overview.OverallStatus, "FAIL")
+	if status.Overview.OverallStatus != StatusFail {
+		t.Errorf("OverallStatus = %q, want %q", status.Overview.OverallStatus, StatusFail)
 	}
 	if len(status.Overview.Issues) != 4 {
 		t.Errorf("Issues count = %d, want 4", len(status.Overview.Issues))
@@ -717,6 +717,108 @@ func TestFetchValidatorSet_NotInSet(t *testing.T) {
 	if status.Blockchain.VotingPower != 0 {
 		t.Errorf("VotingPower should be 0, got %d", status.Blockchain.VotingPower)
 	}
+}
+
+func TestReconcileValidatorStatus(t *testing.T) {
+	t.Run("RPC overrides setup/report FAIL", func(t *testing.T) {
+		status := &NodeStatus{}
+		status.SetupReport = &SetupReport{
+			OverallStatus: StatusFail,
+			Summary:       SetupSummary{PassedChecks: 9, TotalChecks: 11},
+			Checks: []SetupCheck{
+				{ID: "block_sync", Status: StatusPass, Message: "Block sync OK"},
+				{ID: "validator_in_set", Status: StatusFail, Message: "Validator not in active set"},
+				{ID: "active_in_epoch", Status: StatusFail, Message: "Not active in current epoch"},
+			},
+		}
+		status.Overview.ChecksPassed = 9
+		status.Overview.ChecksTotal = 11
+		status.Overview.OverallStatus = StatusFail
+		status.Overview.Issues = []string{
+			"Validator not in active set",
+			"Not active in current epoch",
+		}
+		// RPC says validator IS in set
+		status.Blockchain.IsValidator = true
+		status.Blockchain.VotingPower = 178
+
+		reconcileValidatorStatus(status)
+
+		if len(status.Overview.Issues) != 1 {
+			t.Errorf("expected 1 issue, got %d: %v", len(status.Overview.Issues), status.Overview.Issues)
+		}
+		if status.Overview.Issues[0] != "Not active in current epoch" {
+			t.Errorf("expected active_in_epoch issue to remain, got %q", status.Overview.Issues[0])
+		}
+		if status.Overview.ChecksPassed != 10 {
+			t.Errorf("expected 10 checks passed, got %d", status.Overview.ChecksPassed)
+		}
+	})
+
+	t.Run("No reconciliation when RPC says not validator", func(t *testing.T) {
+		status := &NodeStatus{}
+		status.SetupReport = &SetupReport{
+			Checks: []SetupCheck{
+				{ID: "validator_in_set", Status: StatusFail, Message: "Validator not in active set"},
+			},
+		}
+		status.Overview.Issues = []string{"Validator not in active set"}
+		status.Overview.ChecksPassed = 9
+		status.Blockchain.IsValidator = false
+
+		reconcileValidatorStatus(status)
+
+		if len(status.Overview.Issues) != 1 {
+			t.Error("issues should not change when RPC also says not validator")
+		}
+		if status.Overview.ChecksPassed != 9 {
+			t.Error("checks passed should not change")
+		}
+	})
+
+	t.Run("No reconciliation when setup/report says PASS", func(t *testing.T) {
+		status := &NodeStatus{}
+		status.SetupReport = &SetupReport{
+			Checks: []SetupCheck{
+				{ID: "validator_in_set", Status: StatusPass, Message: "Validator in active set"},
+			},
+		}
+		status.Overview.Issues = []string{}
+		status.Overview.ChecksPassed = 11
+		status.Blockchain.IsValidator = true
+
+		reconcileValidatorStatus(status)
+
+		if len(status.Overview.Issues) != 0 {
+			t.Error("issues should remain empty")
+		}
+		if status.Overview.ChecksPassed != 11 {
+			t.Error("checks should stay at 11")
+		}
+	})
+
+	t.Run("All checks pass after reconciliation", func(t *testing.T) {
+		status := &NodeStatus{}
+		status.SetupReport = &SetupReport{
+			Checks: []SetupCheck{
+				{ID: "validator_in_set", Status: StatusFail, Message: "Validator not in active set"},
+			},
+		}
+		status.Overview.Issues = []string{"Validator not in active set"}
+		status.Overview.ChecksPassed = 10
+		status.Overview.ChecksTotal = 11
+		status.Overview.OverallStatus = StatusFail
+		status.Blockchain.IsValidator = true
+
+		reconcileValidatorStatus(status)
+
+		if status.Overview.OverallStatus != StatusPass {
+			t.Errorf("expected PASS overall, got %q", status.Overview.OverallStatus)
+		}
+		if status.Overview.ChecksPassed != 11 {
+			t.Errorf("expected 11 checks passed, got %d", status.Overview.ChecksPassed)
+		}
+	})
 }
 
 func TestParseModelArgs(t *testing.T) {

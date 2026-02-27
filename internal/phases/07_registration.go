@@ -102,6 +102,11 @@ func (p *Registration) runQuick(ctx context.Context, state *config.State) error 
 		`inferenced register-new-participant %s %s --node-address %s`,
 		state.PublicURL, state.AccountPubKey, seedURL,
 	)
+	// Always pass --consensus-key since docker compose run --no-deps cannot
+	// auto-fetch from DAPI_CHAIN_NODE__URL (node container is not linked).
+	if state.ConsensusKey != "" {
+		registerCmd += fmt.Sprintf(` --consensus-key %s`, state.ConsensusKey)
+	}
 	ui.Detail("Command: %s", registerCmd)
 
 	err := ui.WithSpinner("Registering node on-chain", func() error {
@@ -302,6 +307,11 @@ func (p *Registration) tryTestnetRegister(ctx context.Context, state *config.Sta
 		`inferenced register-new-participant %s %s --node-address %s`,
 		state.PublicURL, state.AccountPubKey, seedURL,
 	)
+	// Always pass --consensus-key since docker compose run --no-deps cannot
+	// auto-fetch from DAPI_CHAIN_NODE__URL (node container is not linked).
+	if state.ConsensusKey != "" {
+		registerCmd += fmt.Sprintf(` --consensus-key %s`, state.ConsensusKey)
+	}
 	ui.Detail("Command: %s", registerCmd)
 
 	err := ui.WithSpinner("Registering node on-chain", func() error {

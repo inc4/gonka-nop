@@ -339,6 +339,211 @@ func TestDriverMajorVersion(t *testing.T) {
 	}
 }
 
+func TestParseLsblkJSON(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantCount int
+		wantErr   bool
+	}{
+		{
+			name: "Mixed mounted and unmounted drives",
+			input: `{
+				"blockdevices": [
+					{"name":"nvme0n1","size":480103981056,"type":"disk","mountpoint":null,"fstype":null,"children":[
+						{"name":"nvme0n1p1","size":536870912,"type":"part","mountpoint":"/boot/efi","fstype":"vfat"},
+						{"name":"nvme0n1p2","size":479565127680,"type":"part","mountpoint":"/","fstype":"ext4"}
+					]},
+					{"name":"nvme1n1","size":3840755982336,"type":"disk","mountpoint":"/GONKA","fstype":"ext4"},
+					{"name":"nvme2n1","size":3840755982336,"type":"disk","mountpoint":null,"fstype":null},
+					{"name":"nvme3n1","size":3840755982336,"type":"disk","mountpoint":null,"fstype":null},
+					{"name":"loop0","size":113246208,"type":"loop","mountpoint":"/snap/core","fstype":"squashfs"}
+				]
+			}`,
+			wantCount: 5,
+		},
+		{
+			name:      "Empty blockdevices",
+			input:     `{"blockdevices": []}`,
+			wantCount: 0,
+		},
+		{
+			name:    "Invalid JSON",
+			input:   `not json`,
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			devices, err := ParseLsblkJSON(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr {
+				return
+			}
+			if len(devices) != tt.wantCount {
+				t.Errorf("got %d devices, want %d", len(devices), tt.wantCount)
+			}
+		})
+	}
+}
+
+func TestParseLsblkJSON_Children(t *testing.T) {
+	input := `{
+		"blockdevices": [
+			{"name":"nvme0n1","size":480103981056,"type":"disk","mountpoint":null,"fstype":null,"children":[
+				{"name":"nvme0n1p1","size":536870912,"type":"part","mountpoint":"/boot/efi","fstype":"vfat"},
+				{"name":"nvme0n1p2","size":479565127680,"type":"part","mountpoint":"/","fstype":"ext4"}
+			]}
+		]
+	}`
+	devices, err := ParseLsblkJSON(input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(devices) != 1 {
+		t.Fatalf("expected 1 device, got %d", len(devices))
+	}
+	if len(devices[0].Children) != 2 {
+		t.Errorf("expected 2 children, got %d", len(devices[0].Children))
+	}
+}
+
+func TestFindUnmountedDrives(t *testing.T) {
+	strPtr := func(s string) *string { return &s }
+	tests := []struct {
+		name      string
+		devices   []BlockDevice
+		minSizeGB int
+		wantCount int
+		wantNames []string
+	}{
+		{
+			name: "Mix of mounted and unmounted",
+			devices: []BlockDevice{
+				{Name: "nvme0n1", Size: 480e9, Type: "disk", Mountpoint: nil, Children: []BlockDevice{
+					{Name: "nvme0n1p1", Size: 500e6, Type: "part", Mountpoint: strPtr("/boot/efi")},
+					{Name: "nvme0n1p2", Size: 479e9, Type: "part", Mountpoint: strPtr("/")},
+				}},
+				{Name: "nvme1n1", Size: 3840e9, Type: "disk", Mountpoint: strPtr("/GONKA")},
+				{Name: "nvme2n1", Size: 3840e9, Type: "disk", Mountpoint: nil},
+				{Name: "nvme3n1", Size: 3840e9, Type: "disk", Mountpoint: nil},
+			},
+			minSizeGB: 500,
+			wantCount: 2,
+			wantNames: []string{"nvme2n1", "nvme3n1"},
+		},
+		{
+			name: "Loop devices excluded",
+			devices: []BlockDevice{
+				{Name: "loop0", Size: 1e12, Type: "loop", Mountpoint: nil},
+				{Name: "nvme2n1", Size: 3840e9, Type: "disk", Mountpoint: nil},
+			},
+			minSizeGB: 500,
+			wantCount: 1,
+			wantNames: []string{"nvme2n1"},
+		},
+		{
+			name: "Drive too small",
+			devices: []BlockDevice{
+				{Name: "sda", Size: 100e9, Type: "disk", Mountpoint: nil},
+			},
+			minSizeGB: 500,
+			wantCount: 0,
+		},
+		{
+			name: "Drive with mounted partition excluded",
+			devices: []BlockDevice{
+				{Name: "nvme0n1", Size: 3840e9, Type: "disk", Mountpoint: nil, Children: []BlockDevice{
+					{Name: "nvme0n1p1", Size: 3840e9, Type: "part", Mountpoint: strPtr("/data")},
+				}},
+			},
+			minSizeGB: 500,
+			wantCount: 0,
+		},
+		{
+			name: "All drives mounted",
+			devices: []BlockDevice{
+				{Name: "nvme1n1", Size: 3840e9, Type: "disk", Mountpoint: strPtr("/data")},
+				{Name: "nvme2n1", Size: 3840e9, Type: "disk", Mountpoint: strPtr("/backup")},
+			},
+			minSizeGB: 500,
+			wantCount: 0,
+		},
+		{
+			name: "Drive with existing filesystem but unmounted",
+			devices: []BlockDevice{
+				{Name: "nvme4n1", Size: 3840e9, Type: "disk", Mountpoint: nil, Fstype: strPtr("ext4")},
+			},
+			minSizeGB: 500,
+			wantCount: 1,
+			wantNames: []string{"nvme4n1"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FindUnmountedDrives(tt.devices, tt.minSizeGB)
+			if len(got) != tt.wantCount {
+				t.Fatalf("got %d drives, want %d", len(got), tt.wantCount)
+			}
+			for i, name := range tt.wantNames {
+				if i < len(got) && got[i].Name != name {
+					t.Errorf("drive[%d].Name = %q, want %q", i, got[i].Name, name)
+				}
+			}
+		})
+	}
+}
+
+func TestParseDfSource(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{"Normal", "Filesystem\n/dev/nvme0n1p3\n", "/dev/nvme0n1p3", false},
+		{"With extra whitespace", "  Filesystem  \n  /dev/sda1  \n", "/dev/sda1", false},
+		{"Tmpfs", "Filesystem\ntmpfs\n", "tmpfs", false},
+		{"Single line", "/dev/sda1", "", true},
+		{"Empty", "", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseDfSource(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("ParseDfSource() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatDriveSize(t *testing.T) {
+	tests := []struct {
+		bytes int64
+		want  string
+	}{
+		{3840755982336, "3.8 TB"},
+		{480103981056, "480 GB"},
+		{1000000000000, "1.0 TB"},
+		{500000000000, "500 GB"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			got := FormatDriveSize(tt.bytes)
+			if got != tt.want {
+				t.Errorf("FormatDriveSize(%d) = %q, want %q", tt.bytes, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseDiskFreeGB(t *testing.T) {
 	tests := []struct {
 		name    string

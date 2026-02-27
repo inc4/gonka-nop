@@ -99,10 +99,6 @@ func (p *GPUDetection) Run(ctx context.Context, state *config.State) error {
 	ui.Detail("MLNode Image: ghcr.io/product-science/mlnode:%s", state.MLNodeImageTag)
 	ui.Detail("Attention Backend: %s", state.AttentionBackend)
 
-	if rec.PP > 1 {
-		ui.Warn("pipeline-parallel-size > 1: PoC v2 may not work with MQLLMEngineClient")
-	}
-
 	if !topology.HasNVLink && len(gpus) > 1 {
 		ui.Warn("Without NVLink, multi-GPU inference may have higher latency from PCIe bottleneck")
 	}
@@ -164,7 +160,7 @@ type GPURecommendation struct {
 
 // recommendConfig returns recommended configuration based on GPU setup.
 // Incorporates validator chat findings: memory utilization 0.88-0.94, fp8 kv-cache for tight VRAM.
-func recommendConfig(gpuCount int, vramMB int, _ string, hasNVLink bool) GPURecommendation {
+func recommendConfig(gpuCount int, vramMB int, _ string, _ bool) GPURecommendation {
 	totalVRAM := gpuCount * vramMB
 
 	switch {
@@ -175,15 +171,12 @@ func recommendConfig(gpuCount int, vramMB int, _ string, hasNVLink bool) GPUReco
 			KVCacheDtype: kvCacheDtypeAuto,
 		}
 		// 235B FP8 needs ~120GB for weights. Remaining VRAM for KV cache.
-		if gpuCount >= 8 && hasNVLink {
-			rec.TP = 8
+		// MLNode runner auto-calculates PP from available GPUs (e.g. 8 GPUs / TP=4 → PP=2).
+		// We only set TP here; PP is always 1 in node-config.json.
+		if gpuCount >= 8 {
+			rec.TP = 4
 			rec.PP = 1
 			rec.MaxModelLen = 240000
-		} else if gpuCount >= 8 {
-			rec.TP = 4
-			rec.PP = 2
-			rec.MaxModelLen = 131072
-			ui.Warn("PP=2 may cause PoC v2 issues — consider 8-way TP if possible")
 		} else {
 			// 4x 80GB = 320GB, tight fit
 			rec.TP = gpuCount
@@ -263,14 +256,10 @@ func selectMLNodeImage(arch string) string {
 	}
 }
 
-// selectAttentionBackend returns the vLLM attention backend for the GPU architecture
-func selectAttentionBackend(arch string) string {
-	switch arch {
-	case "sm_100", "sm_120": // Blackwell: FlashAttention not available
-		return "FLASHINFER"
-	default:
-		return "FLASH_ATTN"
-	}
+// selectAttentionBackend returns the vLLM attention backend for the GPU architecture.
+// FLASHINFER is the standard backend across all architectures in mlnode 3.0.12+.
+func selectAttentionBackend(_ string) string {
+	return "FLASHINFER"
 }
 
 // FormatGPUSummary returns a formatted GPU summary string
