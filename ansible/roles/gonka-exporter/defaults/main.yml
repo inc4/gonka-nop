@@ -1,0 +1,7 @@
+exporter_image: "ghcr.io/votkon/gonka-exporter-prometheus:latest"
+exporter_port: 9401
+exporter_refresh_interval: 30
+export_network_metrics: "false"
+enable_node_fetch: "true"
+participant_address: ""
+node_alias: "gonka-node"

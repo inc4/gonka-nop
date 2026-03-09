@@ -1,0 +1,35 @@
+# Shared variables
+monitoring_dir: "{{ deploy_dir | default('/data/gonka-node') }}/monitoring"
+
+# Exporter settings
+exporter_image: "ghcr.io/votkon/gonka-exporter-prometheus:latest"
+exporter_port: 9401
+exporter_refresh_interval: 30
+export_network_metrics: "true"
+enable_node_fetch: "true"
+
+# Prometheus settings
+prometheus_image: "prom/prometheus:v3.2.1"
+prometheus_port: 9090
+prometheus_retention: "30d"
+prometheus_scrape_interval: "30s"
+
+# Grafana settings
+grafana_image: "grafana/grafana:11.5.2"
+grafana_port: 3000
+grafana_admin_password: "gonka-monitoring-change-me"
+
+# Alertmanager settings
+alertmanager_image: "prom/alertmanager:v0.28.1"
+alertmanager_port: 9093
+
+# Remote write (for production push mode)
+# Set these when pushing to a central server
+# remote_write_url: "https://monitor.example.com/api/v1/write"
+# remote_write_user: ""
+# remote_write_password: ""
+
+# Alert notification (optional)
+# telegram_bot_token: ""
+# telegram_chat_id: ""
+# discord_webhook_url: ""

@@ -1,0 +1,29 @@
+---
+# Deploy only the exporter on validator nodes (production: push to central)
+# Usage: ansible-playbook playbooks/deploy-exporter.yml -l mainnet-2
+- name: Deploy Gonka exporter (validator node only)
+  hosts: validators
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Verify Docker is available
+      ansible.builtin.command: docker info
+      changed_when: false
+
+  roles:
+    - gonka-exporter
+
+  post_tasks:
+    - name: Verify exporter is producing metrics
+      ansible.builtin.uri:
+        url: "http://localhost:{{ exporter_port }}/metrics"
+        method: GET
+        return_content: true
+      register: metrics_check
+
+    - name: Show key metrics found
+      ansible.builtin.debug:
+        msg: |
+          Exporter running at http://{{ ansible_host }}:{{ exporter_port }}/metrics
+          Metrics available: {{ metrics_check.content | regex_findall('gonka_\\w+') | unique | length }} gonka_* metrics

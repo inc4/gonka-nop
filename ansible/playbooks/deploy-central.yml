@@ -1,0 +1,31 @@
+---
+# Deploy central monitoring server (Prometheus + Grafana + Alertmanager)
+# Usage: ansible-playbook playbooks/deploy-central.yml -l monitoring_servers
+- name: Deploy central monitoring server
+  hosts: monitoring_servers
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Verify Docker is available
+      ansible.builtin.command: docker info
+      changed_when: false
+
+  roles:
+    - prometheus
+    - alertmanager
+    - grafana
+
+  post_tasks:
+    - name: Show access information
+      ansible.builtin.debug:
+        msg: |
+          Central monitoring server deployed!
+
+          Grafana:      http://{{ ansible_host }}:{{ grafana_port }}
+                        User: admin / {{ grafana_admin_password }}
+          Prometheus:   http://{{ ansible_host }}:{{ prometheus_port }}
+          Alertmanager: http://{{ ansible_host }}:{{ alertmanager_port }}
+
+          To connect validator nodes, set remote_write_url to:
+            http://{{ ansible_host }}:{{ prometheus_port }}/api/v1/write

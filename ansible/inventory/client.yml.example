@@ -1,0 +1,22 @@
+# Copy this file to client.yml and fill in your values:
+#   cp inventory/client.yml.example inventory/client.yml
+#
+# Then run:
+#   ansible-playbook playbooks/client-deploy.yml -i inventory/client.yml
+
+all:
+  hosts:
+    my-node:
+      # === REQUIRED: Your server ===
+      ansible_host: 1.2.3.4              # Your server IP
+      ansible_user: ubuntu                # SSH user
+
+      # === REQUIRED: Your node ===
+      node_alias: "my-validator"          # Name shown in Grafana (pick anything)
+      deploy_dir: /home/ubuntu/gonka-node # Path to your gonka deploy directory
+      participant_address: "gonka1..."    # Your on-chain address (from config.env ACCOUNT_PUBKEY lookup)
+
+      # === OPTIONAL ===
+      # ansible_become: true             # Uncomment if Docker requires sudo
+      # ansible_ssh_port: 22             # Non-standard SSH port
+      # ansible_ssh_private_key_file: ~/.ssh/id_rsa

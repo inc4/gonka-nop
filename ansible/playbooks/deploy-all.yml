@@ -1,0 +1,43 @@
+---
+# Deploy full monitoring stack on a single server (for testing)
+# Usage: ansible-playbook playbooks/deploy-all.yml -l mainnet-2
+- name: Deploy Gonka monitoring (full stack)
+  hosts: validators
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Verify Docker is available
+      ansible.builtin.command: docker info
+      changed_when: false
+
+    - name: Verify deploy directory exists
+      ansible.builtin.stat:
+        path: "{{ deploy_dir }}"
+      register: deploy_check
+      failed_when: not deploy_check.stat.exists
+
+  vars:
+    has_alertmanager: true
+
+  roles:
+    - gonka-exporter
+    - prometheus
+    - alertmanager
+    - grafana
+
+  post_tasks:
+    - name: Show access information
+      ansible.builtin.debug:
+        msg: |
+          Monitoring stack deployed successfully!
+
+          Grafana:      http://{{ ansible_host }}:{{ grafana_port }}
+                        User: admin / {{ grafana_admin_password }}
+          Prometheus:   http://{{ ansible_host }}:{{ prometheus_port }}
+          Alertmanager: http://{{ ansible_host }}:{{ alertmanager_port }}
+          Exporter:     http://{{ ansible_host }}:{{ exporter_port }}/metrics
+
+          Dashboards:
+            - Gonka Fleet Overview
+            - Gonka Node Deep Dive

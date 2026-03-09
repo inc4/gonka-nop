@@ -1,0 +1,56 @@
+---
+- name: Create monitoring directory
+  ansible.builtin.file:
+    path: "{{ monitoring_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Create exporter build directory
+  ansible.builtin.file:
+    path: "{{ monitoring_dir }}/exporter-build"
+    state: directory
+    mode: "0755"
+
+- name: Copy exporter source
+  ansible.builtin.copy:
+    src: exporter.py
+    dest: "{{ monitoring_dir }}/exporter-build/exporter.py"
+    mode: "0644"
+
+- name: Copy exporter Dockerfile
+  ansible.builtin.copy:
+    src: Dockerfile
+    dest: "{{ monitoring_dir }}/exporter-build/Dockerfile"
+    mode: "0644"
+
+- name: Build gonka-exporter image
+  community.docker.docker_image:
+    name: gonka-exporter
+    tag: local
+    source: build
+    build:
+      path: "{{ monitoring_dir }}/exporter-build"
+    force_source: true
+
+- name: Deploy gonka-exporter docker-compose
+  ansible.builtin.template:
+    src: docker-compose.exporter.yml.j2
+    dest: "{{ monitoring_dir }}/docker-compose.exporter.yml"
+    mode: "0644"
+
+- name: Start gonka-exporter
+  community.docker.docker_compose_v2:
+    project_src: "{{ monitoring_dir }}"
+    files:
+      - docker-compose.exporter.yml
+    state: present
+
+- name: Wait for exporter to be ready
+  ansible.builtin.uri:
+    url: "http://localhost:{{ exporter_port }}/metrics"
+    method: GET
+    status_code: 200
+  register: exporter_health
+  retries: 10
+  delay: 5
+  until: exporter_health.status == 200

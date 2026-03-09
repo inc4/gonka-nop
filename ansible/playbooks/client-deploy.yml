@@ -1,0 +1,114 @@
+---
+# Deploy Gonka monitoring client on your validator node.
+# Pushes metrics to the centralized Gonka monitoring server.
+#
+# Usage:
+#   ansible-playbook playbooks/client-deploy.yml -i inventory/client.yml
+#
+# Requirements:
+#   - ansible-galaxy collection install community.docker
+#   - SSH access to your server
+#   - Docker installed on your server
+#   - Gonka node running (node, api, mlnode containers)
+
+- name: Deploy Gonka monitoring client
+  hosts: all
+  become: "{{ ansible_become | default(false) }}"
+  gather_facts: true
+
+  vars:
+    # Central monitoring server (operated by inc4)
+    central_prometheus_url: "http://202.78.161.151:9090"
+    central_grafana_url: "http://202.78.161.151:3000"
+    remote_write_url: "{{ central_prometheus_url }}/api/v1/write"
+
+    # Client defaults (do not export network-wide metrics — central does that)
+    export_network_metrics: "false"
+    enable_node_fetch: "true"
+    exporter_port: 9401
+    exporter_refresh_interval: 30
+    prometheus_image: "prom/prometheus:v3.2.1"
+    prometheus_port: 9090
+    prometheus_scrape_interval: "30s"
+    prometheus_retention: "7d"
+    alertmanager_port: 9093
+    monitoring_dir: "{{ deploy_dir }}/monitoring"
+
+  pre_tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - node_alias is defined and node_alias | length > 0
+          - deploy_dir is defined and deploy_dir | length > 0
+        fail_msg: |
+          Missing required variables. Make sure your inventory defines:
+            node_alias: "my-validator"
+            deploy_dir: /path/to/gonka-node
+
+    - name: Verify Docker is available
+      ansible.builtin.command: docker info
+      changed_when: false
+
+    - name: Verify deploy directory exists
+      ansible.builtin.stat:
+        path: "{{ deploy_dir }}"
+      register: deploy_check
+      failed_when: not deploy_check.stat.exists
+
+    - name: Verify Gonka node is running
+      ansible.builtin.command: docker ps --filter name=node --format "{{ '{{' }}.Names{{ '}}' }}"
+      register: node_check
+      changed_when: false
+      failed_when: "'node' not in node_check.stdout"
+
+  roles:
+    - gonka-exporter
+    - prometheus
+
+  post_tasks:
+    - name: Wait for metrics pipeline to stabilize
+      ansible.builtin.pause:
+        seconds: 10
+
+    - name: Verify exporter is producing metrics
+      ansible.builtin.uri:
+        url: "http://localhost:{{ exporter_port }}/metrics"
+        method: GET
+        return_content: true
+      register: metrics_output
+
+    - name: Verify remote_write is working
+      ansible.builtin.uri:
+        url: "{{ central_prometheus_url }}/api/v1/query?query=up%7Binstance%3D%22{{ node_alias }}%22%7D"
+        method: GET
+        return_content: true
+      register: prom_check
+      retries: 6
+      delay: 10
+      until: >
+        prom_check.status == 200 and
+        (prom_check.json.data.result | length > 0)
+      ignore_errors: true
+
+    - name: Show deployment result
+      ansible.builtin.debug:
+        msg: |
+          ✅ Gonka monitoring client deployed!
+
+          Local exporter:  http://{{ ansible_host }}:{{ exporter_port }}/metrics
+          Pushing to:      {{ remote_write_url }}
+          Node alias:      {{ node_alias }}
+          Metrics count:   {{ metrics_output.content | regex_findall('gonka_\\w+') | unique | length }} gonka_* metrics
+
+          {% if prom_check is succeeded and prom_check.json.data.result | length > 0 %}
+          ✅ Central server is receiving your metrics!
+          {% else %}
+          ⚠️  Central server hasn't received metrics yet. This may take up to 60s.
+              Check manually: curl '{{ central_prometheus_url }}/api/v1/query?query=gonka_block_height{instance="{{ node_alias }}"}'
+          {% endif %}
+
+          View your node in Grafana:
+            {{ central_grafana_url }}/d/gonka-node-deep-dive?var-instance={{ node_alias }}
+
+          To remove monitoring:
+            ansible-playbook playbooks/client-teardown.yml -i inventory/client.yml

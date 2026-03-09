@@ -1,0 +1,38 @@
+global:
+  scrape_interval: {{ prometheus_scrape_interval }}
+  evaluation_interval: 15s
+  external_labels:
+    cluster: "gonka-monitoring"
+    instance: "{{ node_alias | default('gonka-node') }}"
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+{% if has_alertmanager | default(false) %}
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - "localhost:{{ alertmanager_port }}"
+{% endif %}
+
+scrape_configs:
+  - job_name: gonka-exporter
+    static_configs:
+      - targets: ["localhost:{{ exporter_port }}"]
+        labels:
+          instance: "{{ node_alias | default('gonka-node') }}"
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:{{ prometheus_port }}"]
+
+{% if remote_write_url | default('') | length > 0 %}
+remote_write:
+  - url: "{{ remote_write_url }}"
+{% if remote_write_user | default('') | length > 0 %}
+    basic_auth:
+      username: "{{ remote_write_user }}"
+      password: "{{ remote_write_password }}"
+{% endif %}
+{% endif %}

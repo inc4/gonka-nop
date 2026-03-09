@@ -1,0 +1,46 @@
+---
+# Remove Gonka monitoring client from your validator node.
+#
+# Usage:
+#   ansible-playbook playbooks/client-teardown.yml -i inventory/client.yml
+
+- name: Remove Gonka monitoring client
+  hosts: all
+  become: "{{ ansible_become | default(false) }}"
+  gather_facts: false
+
+  vars:
+    monitoring_dir: "{{ deploy_dir }}/monitoring"
+
+  tasks:
+    - name: Stop exporter
+      community.docker.docker_compose_v2:
+        project_src: "{{ monitoring_dir }}"
+        files:
+          - docker-compose.exporter.yml
+        state: absent
+      ignore_errors: true
+
+    - name: Stop prometheus
+      community.docker.docker_compose_v2:
+        project_src: "{{ monitoring_dir }}"
+        files:
+          - docker-compose.prometheus.yml
+        state: absent
+      ignore_errors: true
+
+    - name: Remove monitoring directory
+      ansible.builtin.file:
+        path: "{{ monitoring_dir }}"
+        state: absent
+
+    - name: Remove exporter image
+      community.docker.docker_image:
+        name: gonka-exporter
+        tag: local
+        state: absent
+      ignore_errors: true
+
+    - name: Done
+      ansible.builtin.debug:
+        msg: "Monitoring removed from {{ inventory_hostname }}. No node containers were affected."

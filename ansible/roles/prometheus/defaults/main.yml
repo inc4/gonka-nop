@@ -1,0 +1,11 @@
+prometheus_image: "prom/prometheus:v3.2.1"
+prometheus_port: 9090
+prometheus_retention: "30d"
+prometheus_scrape_interval: "30s"
+exporter_port: 9401
+alertmanager_port: 9093
+
+# Remote write for push mode (leave empty for local-only)
+remote_write_url: ""
+remote_write_user: ""
+remote_write_password: ""

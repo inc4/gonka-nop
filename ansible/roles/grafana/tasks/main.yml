@@ -1,0 +1,85 @@
+---
+- name: Create grafana directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ monitoring_dir }}/grafana"
+    - "{{ monitoring_dir }}/grafana/data"
+    - "{{ monitoring_dir }}/grafana/provisioning/datasources"
+    - "{{ monitoring_dir }}/grafana/provisioning/dashboards"
+    - "{{ monitoring_dir }}/grafana/dashboards"
+
+- name: Set grafana data directory ownership (grafana uid=472)
+  ansible.builtin.file:
+    path: "{{ monitoring_dir }}/grafana/data"
+    state: directory
+    owner: "472"
+    group: "472"
+    mode: "0755"
+  become: true
+
+- name: Deploy grafana datasource provisioning
+  ansible.builtin.template:
+    src: datasources.yml.j2
+    dest: "{{ monitoring_dir }}/grafana/provisioning/datasources/prometheus.yml"
+    mode: "0644"
+  notify: restart grafana
+
+- name: Deploy grafana dashboard provisioning config
+  ansible.builtin.copy:
+    content: |
+      apiVersion: 1
+      providers:
+        - name: Gonka
+          orgId: 1
+          folder: Gonka
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards
+            foldersFromFilesStructure: false
+    dest: "{{ monitoring_dir }}/grafana/provisioning/dashboards/gonka.yml"
+    mode: "0644"
+  notify: restart grafana
+
+- name: Deploy Fleet Overview dashboard
+  ansible.builtin.copy:
+    src: dashboards/fleet-overview.json
+    dest: "{{ monitoring_dir }}/grafana/dashboards/fleet-overview.json"
+    mode: "0644"
+  notify: restart grafana
+
+- name: Deploy Node Deep Dive dashboard
+  ansible.builtin.copy:
+    src: dashboards/node-deep-dive.json
+    dest: "{{ monitoring_dir }}/grafana/dashboards/node-deep-dive.json"
+    mode: "0644"
+  notify: restart grafana
+
+- name: Deploy grafana docker-compose
+  ansible.builtin.template:
+    src: docker-compose.grafana.yml.j2
+    dest: "{{ monitoring_dir }}/docker-compose.grafana.yml"
+    mode: "0644"
+
+- name: Start grafana
+  community.docker.docker_compose_v2:
+    project_src: "{{ monitoring_dir }}"
+    files:
+      - docker-compose.grafana.yml
+    state: present
+    pull: missing
+
+- name: Wait for grafana to be ready
+  ansible.builtin.uri:
+    url: "http://localhost:{{ grafana_port }}/api/health"
+    method: GET
+    status_code: 200
+  register: grafana_health
+  retries: 12
+  delay: 5
+  until: grafana_health.status == 200
+

@@ -1,0 +1,38 @@
+---
+- name: Create alertmanager directory
+  ansible.builtin.file:
+    path: "{{ monitoring_dir }}/alertmanager"
+    state: directory
+    mode: "0755"
+
+- name: Deploy alertmanager configuration
+  ansible.builtin.template:
+    src: alertmanager.yml.j2
+    dest: "{{ monitoring_dir }}/alertmanager/alertmanager.yml"
+    mode: "0644"
+  notify: restart alertmanager
+
+- name: Deploy alertmanager docker-compose
+  ansible.builtin.template:
+    src: docker-compose.alertmanager.yml.j2
+    dest: "{{ monitoring_dir }}/docker-compose.alertmanager.yml"
+    mode: "0644"
+
+- name: Start alertmanager
+  community.docker.docker_compose_v2:
+    project_src: "{{ monitoring_dir }}"
+    files:
+      - docker-compose.alertmanager.yml
+    state: present
+    pull: missing
+
+- name: Wait for alertmanager to be ready
+  ansible.builtin.uri:
+    url: "http://localhost:{{ alertmanager_port }}/-/ready"
+    method: GET
+    status_code: 200
+  register: am_health
+  retries: 10
+  delay: 3
+  until: am_health.status == 200
+

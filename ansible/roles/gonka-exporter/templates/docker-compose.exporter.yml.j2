@@ -1,0 +1,19 @@
+services:
+  gonka-exporter:
+    image: gonka-exporter:local
+    container_name: gonka-exporter
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - ENABLE_NODE_FETCH={{ enable_node_fetch }}
+      - EXPORT_NETWORK_METRICS={{ export_network_metrics }}
+      - PARTICIPANT_ADDRESS={{ participant_address | default('') }}
+      - REFRESH_INTERVAL={{ exporter_refresh_interval }}
+      - EXPORTER_PORT={{ exporter_port }}
+      - GONKA_BASE_URL=http://localhost:26657
+      - NODE_BASE_URL=http://localhost:9200/admin/v1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /usr/bin/docker:/usr/bin/docker:ro
+    labels:
+      com.gonka.monitoring: "exporter"
