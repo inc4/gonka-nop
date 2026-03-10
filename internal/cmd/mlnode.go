@@ -21,7 +21,7 @@ const (
 var adminURL string
 
 func init() {
-	mlNodeCmd.PersistentFlags().StringVar(&adminURL, "admin-url", "http://localhost:9200", "Admin API URL")
+	mlNodeCmd.PersistentFlags().StringVar(&adminURL, "admin-url", defaultAdminURL, "Admin API URL")
 	mlNodeCmd.AddCommand(mlNodeListCmd)
 	mlNodeCmd.AddCommand(mlNodeStatusCmd)
 	mlNodeCmd.AddCommand(mlNodeEnableCmd)

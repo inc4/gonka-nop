@@ -138,10 +138,7 @@ func (p *KeyManagement) runQuickMocked(state *config.State, baseName string) err
 
 func (p *KeyManagement) runQuickReal(ctx context.Context, state *config.State, baseName, password string) error {
 	// Determine image ref
-	imageRef := "ghcr.io/product-science/inferenced:" + state.ImageVersion
-	if state.ImageVersion == "" {
-		imageRef = "ghcr.io/product-science/inferenced:" + config.DefaultImageVersion
-	}
+	imageRef := "ghcr.io/product-science/inferenced:" + inferenceImageTag(state)
 
 	// Pull inferenced image
 	err := ui.WithSpinner("Pulling inferenced image", func() error {
@@ -283,10 +280,7 @@ func (p *KeyManagement) runSecureMocked(state *config.State, keyName string) err
 }
 
 func (p *KeyManagement) runSecureReal(ctx context.Context, state *config.State, keyName, password string) error {
-	imageRef := "ghcr.io/product-science/inferenced:" + state.ImageVersion
-	if state.ImageVersion == "" {
-		imageRef = "ghcr.io/product-science/inferenced:" + config.DefaultImageVersion
-	}
+	imageRef := "ghcr.io/product-science/inferenced:" + inferenceImageTag(state)
 
 	// Pull image
 	err := ui.WithSpinner("Pulling inferenced image", func() error {
@@ -353,4 +347,17 @@ func runCmdNoOutput(ctx context.Context, name string, args ...string) error {
 		return fmt.Errorf("%s %s: %w\n%s", name, args[0], err, string(out))
 	}
 	return nil
+}
+
+// inferenceImageTag returns the inferenced container image tag, preferring
+// the per-service version from Versions.Node, falling back to ImageVersion
+// and then DefaultImageVersion.
+func inferenceImageTag(state *config.State) string {
+	if state.Versions.Node != "" {
+		return state.Versions.Node
+	}
+	if state.ImageVersion != "" {
+		return state.ImageVersion
+	}
+	return config.DefaultImageVersion
 }

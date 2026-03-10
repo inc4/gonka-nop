@@ -1,6 +1,7 @@
 package phases
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -114,6 +115,169 @@ func GPUArchFromName(gpuName string) string {
 		}
 	}
 	return "unknown"
+}
+
+// ParseOSRelease parses /etc/os-release content into a Distro struct.
+// Expected format: KEY=VALUE or KEY="VALUE" lines.
+func ParseOSRelease(content string) (config.Distro, error) {
+	var d config.Distro
+	vals := make(map[string]string)
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := parts[0]
+		val := strings.Trim(parts[1], `"`)
+		vals[key] = val
+	}
+	d.ID = strings.ToLower(vals["ID"])
+	d.Version = vals["VERSION_ID"]
+	if d.ID == "" {
+		return d, fmt.Errorf("could not determine distro ID from os-release")
+	}
+
+	// Infer family from ID_LIKE or known IDs
+	idLike := strings.ToLower(vals["ID_LIKE"])
+	switch {
+	case d.ID == "ubuntu" || d.ID == "debian" || strings.Contains(idLike, "debian"):
+		d.Family = "debian"
+	case d.ID == "centos" || d.ID == "rhel" || d.ID == "fedora" || d.ID == "rocky" || d.ID == "almalinux" || strings.Contains(idLike, "rhel"):
+		d.Family = "rhel"
+	case d.ID == "amzn":
+		d.Family = "rhel"
+	default:
+		d.Family = "unknown"
+	}
+	return d, nil
+}
+
+// ParseModinfoVersion extracts version from `modinfo nvidia` output.
+// Expected line: "version:        570.133.20"
+func ParseModinfoVersion(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "version:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "version:"))
+		}
+	}
+	return ""
+}
+
+// ParseFabricManagerVersion extracts version from dpkg -l output.
+// Expected line: "ii  nvidia-fabricmanager-570  570.133.20-1  amd64  ..."
+func ParseFabricManagerVersion(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 3 && fields[0] == "ii" && strings.Contains(fields[1], "fabricmanager") {
+			return fields[2]
+		}
+	}
+	return ""
+}
+
+// DriverMajorVersion extracts major version from driver string.
+// "570.133.20" → "570"
+func DriverMajorVersion(driverVersion string) string {
+	parts := strings.SplitN(driverVersion, ".", 2)
+	if len(parts) > 0 {
+		return parts[0]
+	}
+	return ""
+}
+
+// BlockDevice represents a block device from lsblk JSON output.
+type BlockDevice struct {
+	Name       string        `json:"name"`
+	Size       int64         `json:"size"`       // bytes
+	Type       string        `json:"type"`       // "disk", "part", "loop"
+	Mountpoint *string       `json:"mountpoint"` // nil or empty if unmounted
+	Fstype     *string       `json:"fstype"`     // nil or empty if no filesystem
+	Children   []BlockDevice `json:"children"`   // partitions
+}
+
+// lsblkOutput is the top-level JSON structure from lsblk -J.
+type lsblkOutput struct {
+	BlockDevices []BlockDevice `json:"blockdevices"`
+}
+
+// ParseLsblkJSON parses JSON output from `lsblk -J -b -o NAME,SIZE,TYPE,MOUNTPOINT,FSTYPE`.
+func ParseLsblkJSON(jsonOutput string) ([]BlockDevice, error) {
+	var out lsblkOutput
+	if err := json.Unmarshal([]byte(jsonOutput), &out); err != nil {
+		return nil, fmt.Errorf("parse lsblk JSON: %w", err)
+	}
+	return out.BlockDevices, nil
+}
+
+// FindUnmountedDrives returns drives that are unmounted and ≥ minSizeGB.
+// Excludes loop devices, drives with mounted partitions, and drives with existing filesystems.
+func FindUnmountedDrives(devices []BlockDevice, minSizeGB int) []BlockDevice {
+	minBytes := int64(minSizeGB) * 1e9
+	var result []BlockDevice
+	for _, d := range devices {
+		if d.Type != "disk" {
+			continue
+		}
+		if strings.HasPrefix(d.Name, "loop") {
+			continue
+		}
+		if d.Size < minBytes {
+			continue
+		}
+		// Skip if the drive itself is mounted
+		if d.Mountpoint != nil && *d.Mountpoint != "" {
+			continue
+		}
+		// Skip if any child partition is mounted
+		if hasAnyMountedChild(d.Children) {
+			continue
+		}
+		result = append(result, d)
+	}
+	return result
+}
+
+// hasAnyMountedChild returns true if any child device (or nested children) has a mountpoint.
+func hasAnyMountedChild(children []BlockDevice) bool {
+	for _, c := range children {
+		if c.Mountpoint != nil && *c.Mountpoint != "" {
+			return true
+		}
+		if hasAnyMountedChild(c.Children) {
+			return true
+		}
+	}
+	return false
+}
+
+// ParseDfSource extracts the device name from `df --output=source <path>` output.
+// Expected format:
+//
+//	Filesystem
+//	/dev/nvme0n1p3
+func ParseDfSource(dfOutput string) (string, error) {
+	lines := strings.Split(strings.TrimSpace(dfOutput), "\n")
+	if len(lines) < 2 {
+		return "", fmt.Errorf("expected at least 2 lines from df output, got %d", len(lines))
+	}
+	return strings.TrimSpace(lines[len(lines)-1]), nil
+}
+
+// FormatDriveSize formats bytes as a human-readable size string (e.g., "3.5 TB").
+func FormatDriveSize(bytes int64) string {
+	const (
+		tb = 1e12
+		gb = 1e9
+	)
+	if bytes >= int64(tb) {
+		return fmt.Sprintf("%.1f TB", float64(bytes)/tb)
+	}
+	return fmt.Sprintf("%.0f GB", float64(bytes)/gb)
 }
 
 // ParseDiskFreeGB parses output from `df --output=avail -BG <path>` into GB.

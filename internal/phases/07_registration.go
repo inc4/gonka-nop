@@ -19,8 +19,6 @@ const (
 	statusPass           = "PASS"
 	registrationTimeout  = 2 * time.Minute
 	registrationPollTime = 10 * time.Second
-	apiReadyTimeout      = 2 * time.Minute
-	apiReadyPollTime     = 5 * time.Second
 )
 
 // Registration handles on-chain node registration and ML permissions.
@@ -49,9 +47,16 @@ func (p *Registration) Run(ctx context.Context, state *config.State) error {
 		adminURL = defaultAdminURL
 	}
 
-	// Wait for API to become responsive
-	if err := p.waitForAPI(ctx, adminURL); err != nil {
-		return fmt.Errorf("wait for API: %w", err)
+	// Build public URL early (needed for manual instructions even if API isn't ready)
+	state.PublicURL = fmt.Sprintf("http://%s:%d", state.PublicIP, state.APIPort)
+
+	// Quick check if Admin API is responsive — don't wait, just probe once.
+	// On fresh deploys the node syncs for hours; no point blocking setup.
+	if !p.isAPIReady(ctx, adminURL) {
+		ui.Warn("Admin API is not responsive yet (node is likely still syncing)")
+		ui.Info("Once the node is synced, register with: gonka-nop register")
+		ui.Detail("Monitor sync progress with: gonka-nop status")
+		return nil
 	}
 
 	// Fetch consensus key for display and verification
@@ -63,9 +68,6 @@ func (p *Registration) Run(ctx context.Context, state *config.State) error {
 		state.ConsensusKey = consensusKey
 		ui.Detail("Consensus key: %s", consensusKey)
 	}
-
-	// Build public URL
-	state.PublicURL = fmt.Sprintf("http://%s:%d", state.PublicIP, state.APIPort)
 
 	// Route to correct workflow
 	if state.IsTestNet {
@@ -100,6 +102,11 @@ func (p *Registration) runQuick(ctx context.Context, state *config.State) error 
 		`inferenced register-new-participant %s %s --node-address %s`,
 		state.PublicURL, state.AccountPubKey, seedURL,
 	)
+	// Always pass --consensus-key since docker compose run --no-deps cannot
+	// auto-fetch from DAPI_CHAIN_NODE__URL (node container is not linked).
+	if state.ConsensusKey != "" {
+		registerCmd += fmt.Sprintf(` --consensus-key %s`, state.ConsensusKey)
+	}
 	ui.Detail("Command: %s", registerCmd)
 
 	err := ui.WithSpinner("Registering node on-chain", func() error {
@@ -247,8 +254,7 @@ func (p *Registration) runTestnet(ctx context.Context, state *config.State) erro
 	registered := p.tryTestnetRegister(ctx, state, seedURL)
 
 	// Step 2: Grant ML permissions (uses /chain-rpc/ path for tx commands)
-	// KeyringPassword is json:"-" so it may be empty if loaded from disk.
-	// Fall back to reading from config.env.
+	// Fall back to config.env if password is empty (old state files).
 	if state.KeyringPassword == "" {
 		p.loadKeyringPassword(state)
 	}
@@ -301,6 +307,11 @@ func (p *Registration) tryTestnetRegister(ctx context.Context, state *config.Sta
 		`inferenced register-new-participant %s %s --node-address %s`,
 		state.PublicURL, state.AccountPubKey, seedURL,
 	)
+	// Always pass --consensus-key since docker compose run --no-deps cannot
+	// auto-fetch from DAPI_CHAIN_NODE__URL (node container is not linked).
+	if state.ConsensusKey != "" {
+		registerCmd += fmt.Sprintf(` --consensus-key %s`, state.ConsensusKey)
+	}
 	ui.Detail("Command: %s", registerCmd)
 
 	err := ui.WithSpinner("Registering node on-chain", func() error {
@@ -369,8 +380,8 @@ func (p *Registration) waitForManualRegistration(state *config.State) bool {
 	return true
 }
 
-// loadKeyringPassword tries to recover the keyring password from config.env.
-// KeyringPassword is json:"-" so it's lost when state is loaded from disk.
+// loadKeyringPassword tries to recover the keyring password from config.env
+// as a fallback (e.g. for state files created before password was persisted).
 func (p *Registration) loadKeyringPassword(state *config.State) {
 	envFile := state.OutputDir + "/config.env"
 	envVars, err := docker.ParseEnvFile(envFile)
@@ -385,36 +396,22 @@ func (p *Registration) loadKeyringPassword(state *config.State) {
 	}
 }
 
-// waitForAPI polls setup/report until the API is responsive.
-func (p *Registration) waitForAPI(ctx context.Context, adminURL string) error {
-	apiCtx, cancel := context.WithTimeout(ctx, apiReadyTimeout)
+// isAPIReady does a single probe of the Admin API — returns true if responsive.
+func (p *Registration) isAPIReady(ctx context.Context, adminURL string) bool {
+	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	sp := ui.NewSpinner("Waiting for Admin API to become responsive...")
-	sp.Start()
-	defer sp.Stop()
-
-	for {
-		req, err := http.NewRequestWithContext(apiCtx, http.MethodGet, adminURL+"/admin/v1/setup/report", nil)
-		if err != nil {
-			return fmt.Errorf("create request: %w", err)
-		}
-		client := &http.Client{Timeout: 5 * time.Second}
-		resp, err := client.Do(req)
-		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				sp.StopWithSuccess("Admin API is responsive")
-				return nil
-			}
-		}
-
-		select {
-		case <-apiCtx.Done():
-			return fmt.Errorf("API not responsive after %s", apiReadyTimeout)
-		case <-time.After(apiReadyPollTime):
-		}
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, adminURL+"/admin/v1/setup/report", nil)
+	if err != nil {
+		return false
 	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
 // FetchConsensusKey fetches the consensus (validator) key.

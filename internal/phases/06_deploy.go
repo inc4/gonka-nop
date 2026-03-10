@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"time"
 
 	"github.com/inc4/gonka-nop/internal/config"
@@ -13,14 +12,13 @@ import (
 )
 
 const (
-	defaultAdminURL   = "http://localhost:9200"
-	defaultRPCURL     = "http://localhost:26657"
-	syncTimeout       = 30 * time.Minute
-	syncPollInterval  = 5 * time.Second
-	modelLoadTimeout  = 15 * time.Minute
-	modelPollInterval = 10 * time.Second
-	cmdSudo           = "sudo"
-	cmdDocker         = "docker"
+	defaultAdminURL    = "http://localhost:9200"
+	defaultRPCURL      = "http://localhost:26657"
+	pullTimeout        = 30 * time.Minute
+	syncStartupTimeout = 90 * time.Second
+	syncPollInterval   = 5 * time.Second
+	cmdSudo            = "sudo"
+	cmdDocker          = "docker"
 )
 
 // Deploy starts the Docker containers with security hardening
@@ -71,9 +69,6 @@ func (p *Deploy) Run(ctx context.Context, state *config.State) error {
 	if err := p.startNetworkNode(ctx, state); err != nil {
 		return err
 	}
-	if err := p.fixTMKMSChainID(ctx, state); err != nil {
-		ui.Warn("TMKMS chain ID fix failed: %v", err)
-	}
 	if err := p.monitorSync(ctx, state); err != nil {
 		return err
 	}
@@ -110,13 +105,22 @@ func (p *Deploy) pullImages(ctx context.Context, state *config.State) error {
 		return fmt.Errorf("create compose client: %w", err)
 	}
 
-	sp := ui.NewSpinner("Pulling container images (this may take several minutes)...")
-	sp.Start()
+	ui.Info("Pulling container images (this may take several minutes)...")
 
-	pullErr := client.Pull(ctx)
+	// Stream pull output so the user sees download progress per layer.
+	client.Stdout = os.Stdout
+	client.Stderr = os.Stderr
+
+	pullCtx, pullCancel := context.WithTimeout(ctx, pullTimeout)
+	defer pullCancel()
+
+	pullErr := client.Pull(pullCtx)
+
+	// Reset output streams for subsequent compose operations
+	client.Stdout = nil
+	client.Stderr = nil
 
 	if pullErr != nil {
-		sp.StopWithError("Failed to pull some images")
 		ui.Warn("Pull error: %v", pullErr)
 		ui.Detail("Some images may already be cached locally")
 
@@ -127,9 +131,10 @@ func (p *Deploy) pullImages(ctx context.Context, state *config.State) error {
 		if !proceed {
 			return fmt.Errorf("pull images: %w", pullErr)
 		}
+	} else {
+		ui.Success("Container images pulled")
 	}
 
-	sp.StopWithSuccess("Container images pulled")
 	return nil
 }
 
@@ -178,44 +183,58 @@ func (p *Deploy) monitorSync(ctx context.Context, state *config.State) error {
 		rpcURL = defaultRPCURL
 	}
 
-	syncCtx, cancel := context.WithTimeout(ctx, syncTimeout)
+	// Wait for the node RPC to become reachable (up to 90s),
+	// then check sync status briefly — don't block for full sync.
+	waitCtx, cancel := context.WithTimeout(ctx, syncStartupTimeout)
 	defer cancel()
 
-	sp := ui.NewSpinner("Waiting for blockchain to sync...")
+	sp := ui.NewSpinner("Waiting for node RPC to become available...")
 	sp.Start()
 
-	err := docker.WaitForSync(syncCtx, rpcURL, syncPollInterval, func(s *docker.SyncStatus) {
+	var lastStatus *docker.SyncProgress
+	_ = docker.WaitForSync(waitCtx, rpcURL, syncPollInterval, func(s *docker.SyncProgress) {
+		lastStatus = s
+
+		if s.ConsecutiveFailures > 0 {
+			if s.ConsecutiveFailures >= 12 { // 60s+
+				sp.StopWithError("Node appears stuck in restart loop")
+				ui.Warn("The node container may be stuck restarting (upgrade handler missing?)")
+				ui.Detail("Check logs: docker compose logs node --tail 50")
+				ui.Detail("If Cosmovisor upgrade failed, run: gonka-nop repair")
+				cancel() // stop waiting
+				return
+			}
+			sp.UpdateMessage(fmt.Sprintf("Waiting for node RPC... (attempt %d)", s.ConsecutiveFailures))
+			return
+		}
+
+		// RPC is reachable — we got a sync status. Report and move on.
 		if s.CatchingUp {
-			sp.UpdateMessage(fmt.Sprintf("Syncing... block %s (catching up)",
+			sp.StopWithSuccess(fmt.Sprintf("Node is syncing — block %s (catching up)",
 				formatBlockHeight(int(s.LatestBlockHeight))))
 		} else {
-			sp.UpdateMessage(fmt.Sprintf("Synced to block %s",
+			sp.StopWithSuccess(fmt.Sprintf("Node synced — block %s",
 				formatBlockHeight(int(s.LatestBlockHeight))))
 		}
+		cancel() // got status, stop polling
 	})
 
-	if err != nil {
-		sp.StopWithError("Blockchain sync failed or timed out")
-		ui.Warn("Sync did not complete within %s. The node may still be syncing.", syncTimeout)
-		ui.Detail("Check sync status with: gonka-nop status")
-		ui.Detail("You can continue and let it sync in the background")
-
-		proceed, promptErr := ui.Confirm("Continue with deployment anyway?", true)
-		if promptErr != nil {
-			return promptErr
+	if lastStatus != nil && lastStatus.ConsecutiveFailures >= 12 {
+		// Node appears stuck — check logs for upgrade handler error
+		upgradeName := p.checkUpgradeHandlerError(ctx, state)
+		if upgradeName != "" {
+			ui.Error("Node is stuck: missing upgrade handler for %s", upgradeName)
+			ui.Info("Run 'gonka-nop repair' to download the upgrade binary and fix the node")
+			return fmt.Errorf("node stuck in restart loop: upgrade handler missing for %s — run 'gonka-nop repair'", upgradeName)
 		}
-		if !proceed {
-			return fmt.Errorf("sync not complete: %w", err)
-		}
-		return nil
 	}
 
-	sp.StopWithSuccess("Blockchain synced")
-
-	// Fetch final status for display
-	finalStatus, fetchErr := docker.FetchSyncStatus(ctx, rpcURL)
-	if fetchErr == nil {
-		ui.Detail("Block height: %s", formatBlockHeight(int(finalStatus.LatestBlockHeight)))
+	if lastStatus == nil || lastStatus.ConsecutiveFailures > 0 {
+		ui.Warn("Could not reach node RPC at %s", rpcURL)
+		ui.Detail("The node may still be starting up. Check with: gonka-nop status")
+	} else if lastStatus.CatchingUp {
+		ui.Info("Sync will continue in the background while we set up the ML node")
+		ui.Detail("Monitor progress with: gonka-nop status")
 	}
 
 	return nil
@@ -232,8 +251,8 @@ func (p *Deploy) preDownloadModel(ctx context.Context, state *config.State) erro
 		hfHome = defaultHFHome
 	}
 
-	ui.Header("Model Download")
-	ui.Info("Pre-downloading model %s to %s", modelName, hfHome)
+	ui.Header("Model Cache Check")
+	ui.Info("Checking model %s in %s", modelName, hfHome)
 	ui.Detail("If already cached, this completes instantly")
 
 	client, err := docker.NewComposeClient(state)
@@ -249,6 +268,7 @@ func (p *Deploy) preDownloadModel(ctx context.Context, state *config.State) erro
 	if dlErr != nil {
 		ui.Warn("Model pre-download failed: %v", dlErr)
 		ui.Detail("The ML node will attempt to download the model at startup")
+		ui.Detail("To pre-download manually: gonka-nop download-model %s", modelName)
 
 		proceed, promptErr := ui.Confirm("Continue without pre-download?", true)
 		if promptErr != nil {
@@ -289,8 +309,8 @@ func (p *Deploy) startMLNode(ctx context.Context, state *config.State) error {
 		ui.Detail("ML node: %s", gpuSummary)
 	}
 	if state.TPSize > 0 {
-		ui.Detail("TP=%d, PP=%d, Memory Util=%.2f, Max Model Len=%d",
-			state.TPSize, state.PPSize, state.GPUMemoryUtil, state.MaxModelLen)
+		ui.Detail("TP=%d, Memory Util=%.2f, Max Model Len=%d (PP auto-calculated by runner)",
+			state.TPSize, state.GPUMemoryUtil, state.MaxModelLen)
 	}
 	if state.KVCacheDtype != "" && state.KVCacheDtype != kvCacheDtypeAuto {
 		ui.Detail("KV Cache Dtype: %s (memory optimization)", state.KVCacheDtype)
@@ -299,39 +319,12 @@ func (p *Deploy) startMLNode(ctx context.Context, state *config.State) error {
 		ui.Detail("Attention Backend: %s", state.AttentionBackend)
 	}
 
-	// Wait for model to load
-	adminURL := state.AdminURL
-	if adminURL == "" {
-		adminURL = defaultAdminURL
-	}
-
-	loadCtx, cancel := context.WithTimeout(ctx, modelLoadTimeout)
-	defer cancel()
-
-	sp = ui.NewSpinner("Waiting for model to load (this may take several minutes)...")
-	sp.Start()
-
-	loadErr := docker.WaitForModelLoad(loadCtx, adminURL, modelPollInterval, func(s *docker.MLNodeStatus) {
-		sp.UpdateMessage(fmt.Sprintf("Model status: %s", s.CurrentStatus))
-	})
-
-	if loadErr != nil {
-		sp.StopWithError("Model load failed or timed out")
-		ui.Warn("Model did not load within %s.", modelLoadTimeout)
-		ui.Detail("Check model status with: gonka-nop ml-node status")
-		ui.Detail("Check logs with: docker compose logs mlnode-308 --tail 100")
-
-		proceed, promptErr := ui.Confirm("Continue with deployment anyway?", true)
-		if promptErr != nil {
-			return promptErr
-		}
-		if !proceed {
-			return fmt.Errorf("model load failed: %w", loadErr)
-		}
-		return nil
-	}
-
-	sp.StopWithSuccess(fmt.Sprintf("Model %s loaded", state.SelectedModel))
+	// Model loading is triggered by the API container once the blockchain node
+	// is synced. On a fresh deploy, this can take a while. Don't block here —
+	// let the user check status later.
+	ui.Info("Model will load automatically once the blockchain node is synced")
+	ui.Detail("Monitor progress: gonka-nop status")
+	ui.Detail("Check ML node: gonka-nop ml-node status")
 	return nil
 }
 
@@ -378,58 +371,6 @@ func (p *Deploy) runHealthChecks(ctx context.Context, state *config.State) error
 	return nil
 }
 
-// fixTMKMSChainID patches the TMKMS config when chain_id differs from the hardcoded default.
-// The TMKMS init script hardcodes "gonka-mainnet" regardless of CHAIN_ID env var.
-func (p *Deploy) fixTMKMSChainID(ctx context.Context, state *config.State) error {
-	if state.ChainID == "" || state.ChainID == "gonka-mainnet" {
-		return nil // no fix needed
-	}
-
-	ui.Info("Fixing TMKMS chain_id: gonka-mainnet -> %s", state.ChainID)
-
-	// Wait for tmkms to initialize and create tmkms.toml
-	time.Sleep(5 * time.Second)
-
-	// sed -i "s/gonka-mainnet/<chainID>/g" /root/.tmkms/tmkms.toml
-	sedCmd := fmt.Sprintf(`sed -i "s/gonka-mainnet/%s/g" /root/.tmkms/tmkms.toml`, state.ChainID)
-	execArgs := []string{"exec", "tmkms", "sh", "-c", sedCmd}
-
-	var name string
-	var args []string
-	if state.UseSudo {
-		name = cmdSudo
-		args = append([]string{"-E", cmdDocker}, execArgs...)
-	} else {
-		name = cmdDocker
-		args = execArgs
-	}
-
-	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204
-	cmd.Dir = state.OutputDir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("sed tmkms.toml: %w\n%s", err, string(out))
-	}
-
-	// Restart tmkms to pick up the new chain_id
-	restartArgs := []string{"restart", "tmkms"}
-	if state.UseSudo {
-		name = cmdSudo
-		args = append([]string{"-E", cmdDocker}, restartArgs...)
-	} else {
-		name = cmdDocker
-		args = restartArgs
-	}
-
-	cmd = exec.CommandContext(ctx, name, args...) // #nosec G204
-	cmd.Dir = state.OutputDir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("restart tmkms: %w\n%s", err, string(out))
-	}
-
-	ui.Success("TMKMS chain_id updated to %s", state.ChainID)
-	return nil
-}
-
 func (p *Deploy) showSummary(state *config.State) {
 	ui.Header("Deployment Summary")
 	ui.Detail("Network Node API: http://%s:%d", state.PublicIP, state.APIPort)
@@ -450,6 +391,20 @@ func (p *Deploy) showSummary(state *config.State) {
 	ui.Info("1. Registration will follow in the next phase")
 	ui.Info("2. Monitor status: gonka-nop status")
 	ui.Info("3. Check ML node: gonka-nop ml-node list")
+}
+
+// checkUpgradeHandlerError checks node container logs for upgrade handler errors.
+// Returns the upgrade name if found, empty string otherwise.
+func (p *Deploy) checkUpgradeHandlerError(ctx context.Context, state *config.State) string {
+	cc, err := docker.NewComposeClient(state)
+	if err != nil {
+		return ""
+	}
+	// Node is in first compose file only
+	if len(cc.Files) > 1 {
+		cc.Files = cc.Files[:1]
+	}
+	return docker.CheckUpgradeHandlerError(ctx, cc)
 }
 
 // formatBlockHeight formats a block height with comma separators

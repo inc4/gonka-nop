@@ -25,7 +25,7 @@ func TestBuildVLLMArgs(t *testing.T) {
 		wantArgs []string
 	}{
 		{
-			name: "Default state (non-FP8 model, no quantization)",
+			name: "Default state (non-FP8 model)",
 			state: func() *config.State {
 				s := config.NewState("/tmp/test")
 				s.SelectedModel = nonFP8Model
@@ -36,14 +36,13 @@ func TestBuildVLLMArgs(t *testing.T) {
 			},
 		},
 		{
-			name: "FP8 model gets quantization flag",
+			name: "FP8 model — no quantization flag (runner uses dtype=float16)",
 			state: func() *config.State {
 				s := config.NewState("/tmp/test")
 				s.SelectedModel = fp8Model
 				return s
 			}(),
 			wantArgs: []string{
-				"--quantization", kvCacheDtypeFP8,
 				"--gpu-memory-utilization", "0.90",
 			},
 		},
@@ -57,13 +56,12 @@ func TestBuildVLLMArgs(t *testing.T) {
 				return s
 			}(),
 			wantArgs: []string{
-				"--quantization", kvCacheDtypeFP8,
 				"--gpu-memory-utilization", "0.92",
 				"--tensor-parallel-size", "4",
 			},
 		},
 		{
-			name: "PP > 1 with non-FP8 model",
+			name: "PP is ignored (runner auto-calculates)",
 			state: func() *config.State {
 				s := config.NewState("/tmp/test")
 				s.SelectedModel = nonFP8Model
@@ -73,7 +71,6 @@ func TestBuildVLLMArgs(t *testing.T) {
 			}(),
 			wantArgs: []string{
 				"--gpu-memory-utilization", "0.88",
-				"--pipeline-parallel-size", "2",
 			},
 		},
 		{
@@ -81,22 +78,21 @@ func TestBuildVLLMArgs(t *testing.T) {
 			state: func() *config.State {
 				s := config.NewState("/tmp/test")
 				s.SelectedModel = fp8Model
-				s.TPSize = 8
+				s.TPSize = 4
 				s.GPUMemoryUtil = 0.90
 				s.MaxModelLen = 240000
 				s.KVCacheDtype = kvCacheDtypeFP8
 				return s
 			}(),
 			wantArgs: []string{
-				"--quantization", kvCacheDtypeFP8,
 				"--gpu-memory-utilization", "0.90",
-				"--tensor-parallel-size", "8",
+				"--tensor-parallel-size", "4",
 				"--max-model-len", "240000",
 				"--kv-cache-dtype", kvCacheDtypeFP8,
 			},
 		},
 		{
-			name: "All args combined with FP8 model",
+			name: "All args combined with FP8 model (no quantization, no PP)",
 			state: func() *config.State {
 				s := config.NewState("/tmp/test")
 				s.SelectedModel = fp8Model
@@ -108,10 +104,8 @@ func TestBuildVLLMArgs(t *testing.T) {
 				return s
 			}(),
 			wantArgs: []string{
-				"--quantization", kvCacheDtypeFP8,
 				"--gpu-memory-utilization", "0.90",
 				"--tensor-parallel-size", "4",
-				"--pipeline-parallel-size", "2",
 				"--max-model-len", "131072",
 				"--kv-cache-dtype", kvCacheDtypeFP8,
 			},
@@ -126,12 +120,11 @@ func TestBuildVLLMArgs(t *testing.T) {
 				return s
 			}(),
 			wantArgs: []string{
-				"--quantization", kvCacheDtypeFP8,
 				"--gpu-memory-utilization", "0.92",
 			},
 		},
 		{
-			name: "Testnet model (non-FP8) has no quantization",
+			name: "Testnet model (non-FP8)",
 			state: func() *config.State {
 				s := config.NewState("/tmp/test")
 				s.SelectedModel = "Qwen/Qwen3-4B-Instruct-2507"
@@ -242,7 +235,7 @@ func TestGenerateConfigEnv(t *testing.T) {
 	state.APIPort = 8000
 	state.HFHome = "/mnt/hf"
 	state.SelectedModel = defaultModel
-	state.AttentionBackend = "FLASH_ATTN"
+	state.AttentionBackend = defaultAttentionBackend
 
 	if err := generateConfigEnv(state); err != nil {
 		t.Fatalf("generateConfigEnv() error: %v", err)
@@ -266,7 +259,7 @@ func TestGenerateConfigEnv(t *testing.T) {
 		{"API_SSL_PORT", "API_SSL_PORT=8443"},
 		{"HF_HOME", "HF_HOME=/mnt/hf"},
 		{"MODEL_NAME", "MODEL_NAME=" + defaultModel},
-		{"VLLM_ATTENTION_BACKEND", "VLLM_ATTENTION_BACKEND=FLASH_ATTN"},
+		{"VLLM_ATTENTION_BACKEND", "VLLM_ATTENTION_BACKEND=FLASHINFER"},
 		{"DDoS blocked routes", "GONKA_API_BLOCKED_ROUTES='poc-batches training'"},
 		{"DDoS exempt routes", "GONKA_API_EXEMPT_ROUTES='chat inference'"},
 		{"DISABLE_CHAIN_API", "DISABLE_CHAIN_API=true"},
@@ -308,6 +301,53 @@ func TestGenerateConfigEnv_DefaultsPeers(t *testing.T) {
 	content := string(data)
 	if !strings.Contains(content, "gonka.spv.re:5000") {
 		t.Error("config.env missing default persistent peer")
+	}
+}
+
+func TestGenerateConfigEnv_NATPortSplit(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "gonka-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	state := config.NewState(tmpDir)
+	state.KeyName = "test-key"
+	state.AccountPubKey = "gonka1abc123"
+	state.PublicIP = testIP
+	// Simulate NAT: external ports differ from internal
+	state.P2PPort = 19245        // external P2P port
+	state.APIPort = 19246        // external API port
+	state.InternalP2PPort = 5000 // Docker binding for P2P
+	state.InternalAPIPort = 8000 // Docker binding for proxy
+	state.HFHome = "/mnt/hf"
+	state.SelectedModel = defaultModel
+
+	if err := generateConfigEnv(state); err != nil {
+		t.Fatalf("generateConfigEnv() error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tmpDir, "config.env"))
+	if err != nil {
+		t.Fatalf("failed to read config.env: %v", err)
+	}
+	content := string(data)
+
+	// PUBLIC_URL should use EXTERNAL port (what the internet sees)
+	if !strings.Contains(content, "PUBLIC_URL=http://"+testIP+":19246") {
+		t.Error("PUBLIC_URL should use external API port 19246")
+	}
+	// P2P_EXTERNAL_ADDRESS should use EXTERNAL port
+	if !strings.Contains(content, "P2P_EXTERNAL_ADDRESS=tcp://"+testIP+":19245") {
+		t.Error("P2P_EXTERNAL_ADDRESS should use external P2P port 19245")
+	}
+	// API_PORT should use INTERNAL port (Docker binding inside VM)
+	if !strings.Contains(content, "API_PORT=8000") {
+		t.Error("API_PORT should use internal port 8000, not external 19246")
+	}
+	// Verify API_PORT is NOT the external port
+	if strings.Contains(content, "API_PORT=19246") {
+		t.Error("API_PORT must NOT be the external port — this was the NAT bug")
 	}
 }
 
@@ -476,6 +516,7 @@ func TestGenerateDockerCompose(t *testing.T) {
 		{"DISABLE_CHAIN_GRPC", "DISABLE_CHAIN_GRPC"},
 		{"SYNC_WITH_SNAPSHOTS", "SYNC_WITH_SNAPSHOTS"},
 		{"tmkms service", "tmkms"},
+		{"tmkms CHAIN_ID env var", "CHAIN_ID=${CHAIN_ID}"},
 		{"node service", "node"},
 		{"api service", "api"},
 		{"proxy service", "proxy"},
@@ -497,6 +538,38 @@ func TestGenerateDockerCompose(t *testing.T) {
 	}
 }
 
+func TestGenerateDockerCompose_NATInternalP2PPort(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "gonka-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	state := config.NewState(tmpDir)
+	state.PersistentPeers = []string{"abc123@node1.example.com:5000"}
+	// NAT scenario: external P2P is 19245, internal Docker binding is 5000
+	state.P2PPort = 19245
+	state.InternalP2PPort = 5000
+
+	if err := generateDockerCompose(state); err != nil {
+		t.Fatalf("generateDockerCompose() error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tmpDir, "docker-compose.yml"))
+	if err != nil {
+		t.Fatalf("failed to read docker-compose.yml: %v", err)
+	}
+	content := string(data)
+
+	// Docker should bind to INTERNAL port, not external
+	if !strings.Contains(content, "5000:26656") {
+		t.Error("docker-compose should bind P2P to internal port 5000, not external 19245")
+	}
+	if strings.Contains(content, "19245:26656") {
+		t.Error("docker-compose must NOT bind P2P to external port 19245")
+	}
+}
+
 func TestGenerateMLNodeCompose(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "gonka-test-*")
 	if err != nil {
@@ -507,7 +580,7 @@ func TestGenerateMLNodeCompose(t *testing.T) {
 	state := config.NewState(tmpDir)
 	state.SelectedModel = "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
 	state.MLNodeImageTag = mlnodeBlackwellTag
-	state.AttentionBackend = "FLASHINFER"
+	state.AttentionBackend = defaultAttentionBackend
 	state.HFHome = defaultHFHome
 
 	if err := generateMLNodeCompose(state); err != nil {
@@ -535,7 +608,7 @@ func TestGenerateMLNodeCompose(t *testing.T) {
 		{"node-config volume", "node-config.json"},
 		{"config.env", "config.env"},
 		{"inference service", "inference:"},
-		{"nginx image", "nginx:alpine"},
+		{"nginx image", "nginx:1.28.0"},
 		{"nginx.conf mount", "nginx.conf:/etc/nginx/nginx.conf"},
 		{"PoC port on inference", "127.0.0.1:8080:8080"},
 		{"ML inference port on inference", "127.0.0.1:5050:5000"},
