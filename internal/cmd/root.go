@@ -122,13 +122,16 @@ func runStatus(_ *cobra.Command, _ []string) error {
 	if statusMocked {
 		nodeStatus = status.FetchMockedStatus()
 	} else {
-		// Load state to determine node topology
-		state, _ := config.Load(outputDir)
-		cfg := &status.StatusConfig{
-			NodeType: state.EffectiveNodeType(),
-		}
-		if state.AdminURL != "" {
-			cfg.AdminURL = state.AdminURL
+		// Load state to determine node topology (non-fatal if missing)
+		var cfg *status.StatusConfig
+		state, loadErr := config.Load(outputDir)
+		if loadErr == nil && state != nil {
+			cfg = &status.StatusConfig{
+				NodeType: state.EffectiveNodeType(),
+			}
+			if state.AdminURL != "" {
+				cfg.AdminURL = state.AdminURL
+			}
 		}
 
 		var err error

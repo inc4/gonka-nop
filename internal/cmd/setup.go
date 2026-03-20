@@ -92,7 +92,7 @@ func setupOverrides() {
 		flag, prompt string
 	}{
 		{flagNodeType, "node topology"},
-		{flagNetworkNodeURL, "network node"},
+		{flagNetworkNodeURL, "Admin API URL"},
 		{flagNetwork, "Select network"},
 		{flagKeyWorkflow, "key management workflow"},
 		{flagKeyName, "base name"},
@@ -119,6 +119,11 @@ func setupOverrides() {
 	// keyring-password also matches generic "password" prompt
 	if flagKeyringPass != "" {
 		ui.SetOverride("password", flagKeyringPass)
+	}
+
+	// public-ip also matches "ML node's IP" prompt (mlnode-only topology)
+	if flagPublicIP != "" {
+		ui.SetOverride("ML node's IP", flagPublicIP)
 	}
 }
 
@@ -198,9 +203,13 @@ func resolveNodeType(state *config.State) error {
 		default:
 			return fmt.Errorf("invalid --type value %q (must be full, network, or mlnode)", flagNodeType)
 		}
-		// For mlnode, also check --network-node-url
+		// For mlnode, pre-populate network node fields from URL
 		if flagNodeType == config.NodeTypeMLNode && flagNetworkNodeURL != "" {
 			state.NetworkNodeURL = flagNetworkNodeURL
+			// Extract IP from URL for PoC callback (e.g., "http://10.0.1.100:9200" → "10.0.1.100")
+			if state.NetworkNodeIP == "" {
+				state.NetworkNodeIP = extractIPFromURL(flagNetworkNodeURL)
+			}
 		}
 		return nil
 	}
@@ -237,6 +246,22 @@ func resolveNodeType(state *config.State) error {
 	}
 
 	return nil
+}
+
+// extractIPFromURL extracts the host/IP from a URL like "http://10.0.1.100:9200".
+func extractIPFromURL(rawURL string) string {
+	// Strip scheme
+	s := rawURL
+	for _, prefix := range []string{"https://", "http://"} {
+		s = strings.TrimPrefix(s, prefix)
+	}
+	// Strip port
+	if idx := strings.LastIndex(s, ":"); idx > 0 {
+		s = s[:idx]
+	}
+	// Strip trailing slash
+	s = strings.TrimRight(s, "/")
+	return s
 }
 
 // buildPhaseList constructs the setup phase list based on node topology.
