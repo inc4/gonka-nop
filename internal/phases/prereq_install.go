@@ -90,7 +90,7 @@ func installKernelHeaders(ctx context.Context, useSudo bool) error {
 
 // installDocker installs Docker Engine on Debian/Ubuntu systems.
 func installDocker(ctx context.Context, distro config.Distro, useSudo bool) error {
-	if distro.Family != "debian" {
+	if distro.Family != familyDebian {
 		return fmt.Errorf("docker auto-install only supported on Debian/Ubuntu (detected: %s)", distro.ID)
 	}
 
@@ -163,7 +163,7 @@ func installDocker(ctx context.Context, distro config.Distro, useSudo bool) erro
 
 // installNVIDIADriver installs the NVIDIA driver on Debian/Ubuntu systems.
 func installNVIDIADriver(ctx context.Context, distro config.Distro, useSudo bool) error {
-	if distro.Family != "debian" {
+	if distro.Family != familyDebian {
 		return fmt.Errorf("nvidia driver auto-install only supported on Debian/Ubuntu (detected: %s)", distro.ID)
 	}
 
@@ -235,7 +235,7 @@ func installNVIDIADriver(ctx context.Context, distro config.Distro, useSudo bool
 
 // installContainerToolkit installs the NVIDIA Container Toolkit and configures Docker.
 func installContainerToolkit(ctx context.Context, distro config.Distro, useSudo bool) error {
-	if distro.Family != "debian" {
+	if distro.Family != familyDebian {
 		return fmt.Errorf("container toolkit auto-install only supported on Debian/Ubuntu (detected: %s)", distro.ID)
 	}
 

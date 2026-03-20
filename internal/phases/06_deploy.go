@@ -59,18 +59,29 @@ func (p *Deploy) Run(ctx context.Context, state *config.State) error {
 	}
 
 	ui.Info("Starting deployment from: %s", state.OutputDir)
-	nodeType := state.EffectiveNodeType()
 
+	// Pull images (always — respects ComposeFiles which is topology-aware)
+	if err := p.pullImages(ctx, state); err != nil {
+		return err
+	}
+
+	// Run topology-specific deployment steps
+	if err := p.deployByTopology(ctx, state); err != nil {
+		return err
+	}
+
+	p.showSummary(state, state.EffectiveNodeType())
+	return nil
+}
+
+// deployByTopology runs the deployment steps appropriate for the node topology:
+// firewall, network node start/sync, model download, ML node start, and health checks.
+func (p *Deploy) deployByTopology(ctx context.Context, state *config.State) error {
 	// Firewall (not for mlnode-only — no chain services to protect)
 	if !state.IsMLNodeOnly() {
 		if err := p.configureFirewall(ctx, state); err != nil {
 			return err
 		}
-	}
-
-	// Pull images (always — respects ComposeFiles which is topology-aware)
-	if err := p.pullImages(ctx, state); err != nil {
-		return err
 	}
 
 	// Network node services (skip for mlnode-only)
@@ -100,7 +111,6 @@ func (p *Deploy) Run(ctx context.Context, state *config.State) error {
 		}
 	}
 
-	p.showSummary(state, nodeType)
 	return nil
 }
 

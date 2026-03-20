@@ -36,7 +36,36 @@ func (p *MLNodeConfig) ShouldRun(state *config.State) bool {
 func (p *MLNodeConfig) Run(_ context.Context, state *config.State) error {
 	ui.Header("ML Node Configuration")
 
-	// 1. Ask for network node URL (Admin API)
+	// Collect user inputs (network node URL/IP, ML node IP, HF home, defaults)
+	if err := collectMLNodeInputs(state); err != nil {
+		return err
+	}
+
+	// Generate all configuration files
+	if err := p.generateMLNodeConfigs(state); err != nil {
+		return err
+	}
+
+	// Show registration instructions
+	p.showRegistrationInstructions(state)
+
+	return nil
+}
+
+// collectMLNodeInputs prompts the user for all MLNode-specific inputs and sets defaults.
+func collectMLNodeInputs(state *config.State) error {
+	if err := promptNetworkNodeInfo(state); err != nil {
+		return err
+	}
+	if err := promptMLNodeInfo(state); err != nil {
+		return err
+	}
+	setMLNodeDefaults(state)
+	return nil
+}
+
+// promptNetworkNodeInfo asks for the remote network node's Admin API URL and private IP.
+func promptNetworkNodeInfo(state *config.State) error {
 	if state.NetworkNodeURL == "" {
 		val, err := ui.Input("Enter the network node Admin API URL (e.g., http://10.0.1.100:9200):", "")
 		if err != nil {
@@ -49,7 +78,6 @@ func (p *MLNodeConfig) Run(_ context.Context, state *config.State) error {
 	}
 	ui.Detail("Network node Admin API: %s", state.NetworkNodeURL)
 
-	// 2. Ask for network node private IP (for PoC callback reachability)
 	if state.NetworkNodeIP == "" {
 		val, err := ui.Input("Enter the network node private IP (for PoC callback, e.g., 10.0.1.100):", "")
 		if err != nil {
@@ -61,8 +89,11 @@ func (p *MLNodeConfig) Run(_ context.Context, state *config.State) error {
 		state.NetworkNodeIP = val
 	}
 	ui.Detail("Network node IP (PoC callback): %s", state.NetworkNodeIP)
+	return nil
+}
 
-	// 3. Ask for this server's private IP (for registration host field)
+// promptMLNodeInfo asks for this ML node's IP and HuggingFace cache directory.
+func promptMLNodeInfo(state *config.State) error {
 	if state.PublicIP == "" {
 		val, err := ui.Input("Enter this ML node's IP (reachable from network node):", "")
 		if err != nil {
@@ -75,7 +106,6 @@ func (p *MLNodeConfig) Run(_ context.Context, state *config.State) error {
 	}
 	ui.Detail("ML node IP: %s", state.PublicIP)
 
-	// 4. Ask for HF_HOME
 	if state.HFHome == "" {
 		val, err := ui.Input("Enter HuggingFace cache directory:", DefaultHFHome)
 		if err != nil {
@@ -87,8 +117,11 @@ func (p *MLNodeConfig) Run(_ context.Context, state *config.State) error {
 		state.HFHome = val
 	}
 	ui.Detail("HF_HOME: %s", state.HFHome)
+	return nil
+}
 
-	// 5. Set defaults
+// setMLNodeDefaults sets default values for ML node ports and ID.
+func setMLNodeDefaults(state *config.State) {
 	if state.InferencePort == 0 {
 		state.InferencePort = 5050
 	}
@@ -98,8 +131,10 @@ func (p *MLNodeConfig) Run(_ context.Context, state *config.State) error {
 	if state.MLNodeID == "" {
 		state.MLNodeID = "node1"
 	}
+}
 
-	// 6. Generate configs
+// generateMLNodeConfigs generates all configuration files for the MLNode topology.
+func (p *MLNodeConfig) generateMLNodeConfigs(state *config.State) error {
 	if err := p.generateMLNodeCompose(state); err != nil {
 		return fmt.Errorf("generate mlnode compose: %w", err)
 	}
@@ -110,16 +145,13 @@ func (p *MLNodeConfig) Run(_ context.Context, state *config.State) error {
 		return fmt.Errorf("generate config.env: %w", err)
 	}
 
-	// 7. Set compose files for deploy phase
+	// Set compose files for deploy phase
 	state.ComposeFiles = []string{"docker-compose.mlnode.yml"}
 
-	// 8. Generate registration JSON
+	// Generate registration JSON
 	if err := p.generateRegistrationJSON(state); err != nil {
 		return fmt.Errorf("generate registration JSON: %w", err)
 	}
-
-	// 9. Show registration instructions
-	p.showRegistrationInstructions(state)
 
 	return nil
 }

@@ -12,6 +12,7 @@ import (
 
 const (
 	testIP             = "10.0.0.1"
+	testAltIP          = "1.2.3.4"
 	testBeaconStateURL = "https://beaconstate.info/"
 )
 
@@ -425,7 +426,7 @@ func TestGenerateNodeConfig_HostIsInference(t *testing.T) {
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	state := config.NewState(tmpDir)
-	state.PublicIP = "http://1.2.3.4"
+	state.PublicIP = "http://" + testAltIP
 	state.SelectedModel = defaultModel
 
 	if err := generateNodeConfig(state); err != nil {
@@ -857,7 +858,7 @@ func TestPocCallbackURL(t *testing.T) {
 			name: "full mode uses Docker DNS",
 			state: func() *config.State {
 				s := config.NewState("/tmp/test")
-				s.PublicIP = "1.2.3.4"
+				s.PublicIP = testAltIP
 				return s
 			}(),
 			want: "http://api:9100",
@@ -867,7 +868,7 @@ func TestPocCallbackURL(t *testing.T) {
 			state: func() *config.State {
 				s := config.NewState("/tmp/test")
 				s.NodeType = config.NodeTypeNetwork
-				s.PublicIP = "1.2.3.4"
+				s.PublicIP = testAltIP
 				s.NetworkNodeIP = "10.0.1.100"
 				return s
 			}(),
@@ -878,10 +879,10 @@ func TestPocCallbackURL(t *testing.T) {
 			state: func() *config.State {
 				s := config.NewState("/tmp/test")
 				s.NodeType = config.NodeTypeNetwork
-				s.PublicIP = "1.2.3.4"
+				s.PublicIP = testAltIP
 				return s
 			}(),
-			want: "http://1.2.3.4:9100",
+			want: "http://" + testAltIP + ":9100",
 		},
 	}
 	for _, tt := range tests {
@@ -937,9 +938,9 @@ func TestGenerateDockerComposeNetworkOnly(t *testing.T) {
 
 	state := config.NewState(tmpDir)
 	state.NodeType = config.NodeTypeNetwork
-	state.PublicIP = "1.2.3.4"
+	state.PublicIP = testAltIP
 	state.NetworkNodeIP = "10.0.1.50"
-	state.PersistentPeers = []string{"peer1@1.2.3.4:5000"}
+	state.PersistentPeers = []string{"peer1@" + testAltIP + ":5000"}
 
 	if err := generateDockerCompose(state); err != nil {
 		t.Fatalf("generateDockerCompose() error: %v", err)

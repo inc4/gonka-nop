@@ -55,6 +55,94 @@ func (p *ConfigGeneration) ShouldRun(state *config.State) bool {
 }
 
 func (p *ConfigGeneration) Run(_ context.Context, state *config.State) error {
+	// Collect user inputs (public IP, private IP, ports, HF home)
+	if err := collectConfigInputs(state); err != nil {
+		return err
+	}
+
+	// Create output directory
+	if err := ui.WithSpinner("Creating output directory", func() error {
+		return os.MkdirAll(state.OutputDir, 0750)
+	}); err != nil {
+		return err
+	}
+
+	// Generate config.env
+	if err := ui.WithSpinner("Generating config.env", func() error {
+		return generateConfigEnv(state)
+	}); err != nil {
+		return err
+	}
+	ui.Detail("Created: %s/config.env", state.OutputDir)
+
+	// Generate node-config.json
+	if err := ui.WithSpinner("Generating node-config.json", func() error {
+		return generateNodeConfig(state)
+	}); err != nil {
+		return err
+	}
+	ui.Detail("Created: %s/node-config.json", state.OutputDir)
+
+	// Generate docker-compose.yml
+	if err := ui.WithSpinner("Generating docker-compose.yml", func() error {
+		return generateDockerCompose(state)
+	}); err != nil {
+		return err
+	}
+	ui.Detail("Created: %s/docker-compose.yml", state.OutputDir)
+
+	// Generate mlnode-related configs (skip for network-only topology)
+	if !state.IsNetworkOnly() {
+		// Generate nginx.conf for mlnode proxy
+		if err := ui.WithSpinner("Generating nginx.conf", func() error {
+			return generateNginxConf(state)
+		}); err != nil {
+			return err
+		}
+		ui.Detail("Created: %s/nginx.conf", state.OutputDir)
+
+		// Generate docker-compose.mlnode.yml
+		if err := ui.WithSpinner("Generating docker-compose.mlnode.yml", func() error {
+			return generateMLNodeCompose(state)
+		}); err != nil {
+			return err
+		}
+		ui.Detail("Created: %s/docker-compose.mlnode.yml", state.OutputDir)
+	} else {
+		ui.Info("Skipping ML node configs (network-only topology)")
+	}
+
+	// Generate env-override for testnet
+	if state.IsTestNet {
+		if err := ui.WithSpinner("Generating docker-compose.env-override.yml (testnet)", func() error {
+			return generateEnvOverride(state)
+		}); err != nil {
+			return err
+		}
+		ui.Detail("Created: %s/docker-compose.env-override.yml", state.OutputDir)
+	}
+
+	// Set compose file list
+	state.ComposeFiles = buildComposeFileList(state)
+	ui.Detail("Compose files: %s", strings.Join(state.ComposeFiles, ", "))
+
+	// Show security configuration summary
+	ui.Header("Security Configuration")
+	ui.Success("Internal ports bound to 127.0.0.1 (9100, 9200, 5050, 8080)")
+	ui.Success("DDoS protection defaults enabled (blocked chain API/RPC/GRPC)")
+	ui.Detail("GONKA_API_BLOCKED_ROUTES: poc-batches training")
+	ui.Detail("Pruning: custom (keep-recent=1000, interval=100)")
+	if len(state.PersistentPeers) > 0 {
+		ui.Detail("Persistent peers: %d configured", len(state.PersistentPeers))
+	}
+
+	ui.Success("All configuration files generated")
+	return nil
+}
+
+// collectConfigInputs prompts the user for public IP, optional private IP,
+// port configuration, and HuggingFace home directory.
+func collectConfigInputs(state *config.State) error {
 	// Get public IP/hostname
 	publicIP, err := ui.Input("Enter your server's public IP or hostname:", "")
 	if err != nil {
@@ -82,97 +170,13 @@ func (p *ConfigGeneration) Run(_ context.Context, state *config.State) error {
 
 	// Get HuggingFace home directory (not needed for network-only)
 	if !state.IsNetworkOnly() {
-		hfHome, err := ui.Input("HuggingFace cache directory:", defaultHFHome)
-		if err != nil {
-			return err
+		hfHome, hfErr := ui.Input("HuggingFace cache directory:", defaultHFHome)
+		if hfErr != nil {
+			return hfErr
 		}
 		state.HFHome = hfHome
 	}
 
-	// Create output directory
-	err = ui.WithSpinner("Creating output directory", func() error {
-		return os.MkdirAll(state.OutputDir, 0750)
-	})
-	if err != nil {
-		return err
-	}
-
-	// Generate config.env
-	err = ui.WithSpinner("Generating config.env", func() error {
-		return generateConfigEnv(state)
-	})
-	if err != nil {
-		return err
-	}
-	ui.Detail("Created: %s/config.env", state.OutputDir)
-
-	// Generate node-config.json
-	err = ui.WithSpinner("Generating node-config.json", func() error {
-		return generateNodeConfig(state)
-	})
-	if err != nil {
-		return err
-	}
-	ui.Detail("Created: %s/node-config.json", state.OutputDir)
-
-	// Generate docker-compose.yml
-	err = ui.WithSpinner("Generating docker-compose.yml", func() error {
-		return generateDockerCompose(state)
-	})
-	if err != nil {
-		return err
-	}
-	ui.Detail("Created: %s/docker-compose.yml", state.OutputDir)
-
-	// Generate mlnode-related configs (skip for network-only topology)
-	if !state.IsNetworkOnly() {
-		// Generate nginx.conf for mlnode proxy
-		err = ui.WithSpinner("Generating nginx.conf", func() error {
-			return generateNginxConf(state)
-		})
-		if err != nil {
-			return err
-		}
-		ui.Detail("Created: %s/nginx.conf", state.OutputDir)
-
-		// Generate docker-compose.mlnode.yml
-		err = ui.WithSpinner("Generating docker-compose.mlnode.yml", func() error {
-			return generateMLNodeCompose(state)
-		})
-		if err != nil {
-			return err
-		}
-		ui.Detail("Created: %s/docker-compose.mlnode.yml", state.OutputDir)
-	} else {
-		ui.Info("Skipping ML node configs (network-only topology)")
-	}
-
-	// Generate env-override for testnet
-	if state.IsTestNet {
-		err = ui.WithSpinner("Generating docker-compose.env-override.yml (testnet)", func() error {
-			return generateEnvOverride(state)
-		})
-		if err != nil {
-			return err
-		}
-		ui.Detail("Created: %s/docker-compose.env-override.yml", state.OutputDir)
-	}
-
-	// Set compose file list
-	state.ComposeFiles = buildComposeFileList(state)
-	ui.Detail("Compose files: %s", strings.Join(state.ComposeFiles, ", "))
-
-	// Show security configuration summary
-	ui.Header("Security Configuration")
-	ui.Success("Internal ports bound to 127.0.0.1 (9100, 9200, 5050, 8080)")
-	ui.Success("DDoS protection defaults enabled (blocked chain API/RPC/GRPC)")
-	ui.Detail("GONKA_API_BLOCKED_ROUTES: poc-batches training")
-	ui.Detail("Pruning: custom (keep-recent=1000, interval=100)")
-	if len(state.PersistentPeers) > 0 {
-		ui.Detail("Persistent peers: %d configured", len(state.PersistentPeers))
-	}
-
-	ui.Success("All configuration files generated")
 	return nil
 }
 

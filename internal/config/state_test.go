@@ -9,6 +9,8 @@ import (
 const (
 	testNetworkMainnet   = "mainnet"
 	testKeyWorkflowQuick = "quick"
+	testNetworkNodeURL   = "http://10.0.1.100:9200"
+	testNetworkNodeIP    = "10.0.1.100"
 )
 
 func TestNewState(t *testing.T) {
@@ -261,8 +263,8 @@ func TestIsMLNodeOnly(t *testing.T) {
 func TestResetClearsTopologyFields(t *testing.T) {
 	state := NewState("/tmp/test")
 	state.NodeType = NodeTypeMLNode
-	state.NetworkNodeURL = "http://10.0.1.100:9200"
-	state.NetworkNodeIP = "10.0.1.100"
+	state.NetworkNodeURL = testNetworkNodeURL
+	state.NetworkNodeIP = testNetworkNodeIP
 
 	state.Reset()
 
@@ -286,8 +288,8 @@ func TestSaveAndLoadPreservesTopologyFields(t *testing.T) {
 
 	state := NewState(tmpDir)
 	state.NodeType = NodeTypeMLNode
-	state.NetworkNodeURL = "http://10.0.1.100:9200"
-	state.NetworkNodeIP = "10.0.1.100"
+	state.NetworkNodeURL = testNetworkNodeURL
+	state.NetworkNodeIP = testNetworkNodeIP
 
 	if err := state.Save(); err != nil {
 		t.Fatalf("Save() error: %v", err)
@@ -301,11 +303,11 @@ func TestSaveAndLoadPreservesTopologyFields(t *testing.T) {
 	if loaded.NodeType != NodeTypeMLNode {
 		t.Errorf("NodeType = %q, want %q", loaded.NodeType, NodeTypeMLNode)
 	}
-	if loaded.NetworkNodeURL != "http://10.0.1.100:9200" {
-		t.Errorf("NetworkNodeURL = %q, want %q", loaded.NetworkNodeURL, "http://10.0.1.100:9200")
+	if loaded.NetworkNodeURL != testNetworkNodeURL {
+		t.Errorf("NetworkNodeURL = %q, want %q", loaded.NetworkNodeURL, testNetworkNodeURL)
 	}
-	if loaded.NetworkNodeIP != "10.0.1.100" {
-		t.Errorf("NetworkNodeIP = %q, want %q", loaded.NetworkNodeIP, "10.0.1.100")
+	if loaded.NetworkNodeIP != testNetworkNodeIP {
+		t.Errorf("NetworkNodeIP = %q, want %q", loaded.NetworkNodeIP, testNetworkNodeIP)
 	}
 }
 
