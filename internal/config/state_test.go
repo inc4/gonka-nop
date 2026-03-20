@@ -198,6 +198,117 @@ func TestResetPreservesOutputDir(t *testing.T) {
 	}
 }
 
+func TestEffectiveNodeType(t *testing.T) {
+	tests := []struct {
+		name     string
+		nodeType string
+		want     string
+	}{
+		{"empty defaults to full", "", NodeTypeFull},
+		{"full", NodeTypeFull, NodeTypeFull},
+		{"network", NodeTypeNetwork, NodeTypeNetwork},
+		{"mlnode", NodeTypeMLNode, NodeTypeMLNode},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := NewState("/tmp/test")
+			state.NodeType = tt.nodeType
+			if got := state.EffectiveNodeType(); got != tt.want {
+				t.Errorf("EffectiveNodeType() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsNetworkOnly(t *testing.T) {
+	state := NewState("/tmp/test")
+
+	state.NodeType = ""
+	if state.IsNetworkOnly() {
+		t.Error("empty NodeType should not be network-only")
+	}
+
+	state.NodeType = NodeTypeNetwork
+	if !state.IsNetworkOnly() {
+		t.Error("NodeTypeNetwork should be network-only")
+	}
+
+	state.NodeType = NodeTypeMLNode
+	if state.IsNetworkOnly() {
+		t.Error("NodeTypeMLNode should not be network-only")
+	}
+}
+
+func TestIsMLNodeOnly(t *testing.T) {
+	state := NewState("/tmp/test")
+
+	state.NodeType = ""
+	if state.IsMLNodeOnly() {
+		t.Error("empty NodeType should not be mlnode-only")
+	}
+
+	state.NodeType = NodeTypeMLNode
+	if !state.IsMLNodeOnly() {
+		t.Error("NodeTypeMLNode should be mlnode-only")
+	}
+
+	state.NodeType = NodeTypeFull
+	if state.IsMLNodeOnly() {
+		t.Error("NodeTypeFull should not be mlnode-only")
+	}
+}
+
+func TestResetClearsTopologyFields(t *testing.T) {
+	state := NewState("/tmp/test")
+	state.NodeType = NodeTypeMLNode
+	state.NetworkNodeURL = "http://10.0.1.100:9200"
+	state.NetworkNodeIP = "10.0.1.100"
+
+	state.Reset()
+
+	if state.NodeType != "" {
+		t.Errorf("NodeType should be empty after reset, got %q", state.NodeType)
+	}
+	if state.NetworkNodeURL != "" {
+		t.Errorf("NetworkNodeURL should be empty after reset, got %q", state.NetworkNodeURL)
+	}
+	if state.NetworkNodeIP != "" {
+		t.Errorf("NetworkNodeIP should be empty after reset, got %q", state.NetworkNodeIP)
+	}
+}
+
+func TestSaveAndLoadPreservesTopologyFields(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "gonka-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	state := NewState(tmpDir)
+	state.NodeType = NodeTypeMLNode
+	state.NetworkNodeURL = "http://10.0.1.100:9200"
+	state.NetworkNodeIP = "10.0.1.100"
+
+	if err := state.Save(); err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+
+	loaded, err := Load(tmpDir)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if loaded.NodeType != NodeTypeMLNode {
+		t.Errorf("NodeType = %q, want %q", loaded.NodeType, NodeTypeMLNode)
+	}
+	if loaded.NetworkNodeURL != "http://10.0.1.100:9200" {
+		t.Errorf("NetworkNodeURL = %q, want %q", loaded.NetworkNodeURL, "http://10.0.1.100:9200")
+	}
+	if loaded.NetworkNodeIP != "10.0.1.100" {
+		t.Errorf("NetworkNodeIP = %q, want %q", loaded.NetworkNodeIP, "10.0.1.100")
+	}
+}
+
 func TestSaveAndLoadPreservesGPUFields(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "gonka-test-*")
 	if err != nil {
