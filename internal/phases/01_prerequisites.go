@@ -63,33 +63,40 @@ func (p *Prerequisites) Run(ctx context.Context, state *config.State) error {
 		return err
 	}
 
-	// 5. Check NVIDIA driver → offer install if missing
-	if err := p.checkNVIDIADriver(ctx, state); err != nil {
-		return err
-	}
+	// 5-9: NVIDIA checks — skip for network-only topology (no GPU needed)
+	if !state.IsNetworkOnly() {
+		// 5. Check NVIDIA driver → offer install if missing
+		if err := p.checkNVIDIADriver(ctx, state); err != nil {
+			return err
+		}
 
-	// 6. Check driver consistency (userspace vs kernel module vs FM)
-	if !p.mocked {
-		p.checkDriverConsistency(ctx, state)
-	}
+		// 6. Check driver consistency (userspace vs kernel module vs FM)
+		if !p.mocked {
+			p.checkDriverConsistency(ctx, state)
+		}
 
-	// 7. Check Container Toolkit → offer install if missing
-	if err := p.checkContainerToolkit(ctx, state); err != nil {
-		return err
-	}
+		// 7. Check Container Toolkit → offer install if missing
+		if err := p.checkContainerToolkit(ctx, state); err != nil {
+			return err
+		}
 
-	// 8. Check CUDA in Docker
-	if err := p.checkCUDAInDocker(ctx, state); err != nil {
-		return err
-	}
+		// 8. Check CUDA in Docker
+		if err := p.checkCUDAInDocker(ctx, state); err != nil {
+			return err
+		}
 
-	// 9. Check Fabric Manager if multi-GPU
-	if !p.mocked {
-		p.checkFabricManager(ctx, state)
+		// 9. Check Fabric Manager if multi-GPU
+		if !p.mocked {
+			p.checkFabricManager(ctx, state)
+		}
+
+		// Check auto-updates (NVIDIA driver risk)
+		p.checkAutoUpdates(ctx, state)
+	} else {
+		ui.Info("Skipping NVIDIA checks (network-only topology — no GPU required)")
 	}
 
 	// 10-12. System checks
-	p.checkAutoUpdates(ctx, state)
 	p.checkStorageLayout(ctx, state)
 	p.checkPorts(state)
 

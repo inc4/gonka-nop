@@ -59,30 +59,48 @@ func (p *Deploy) Run(ctx context.Context, state *config.State) error {
 	}
 
 	ui.Info("Starting deployment from: %s", state.OutputDir)
+	nodeType := state.EffectiveNodeType()
 
-	if err := p.configureFirewall(ctx, state); err != nil {
-		return err
+	// Firewall (not for mlnode-only — no chain services to protect)
+	if !state.IsMLNodeOnly() {
+		if err := p.configureFirewall(ctx, state); err != nil {
+			return err
+		}
 	}
+
+	// Pull images (always — respects ComposeFiles which is topology-aware)
 	if err := p.pullImages(ctx, state); err != nil {
 		return err
 	}
-	if err := p.startNetworkNode(ctx, state); err != nil {
-		return err
-	}
-	if err := p.monitorSync(ctx, state); err != nil {
-		return err
-	}
-	if err := p.preDownloadModel(ctx, state); err != nil {
-		return err
-	}
-	if err := p.startMLNode(ctx, state); err != nil {
-		return err
-	}
-	if err := p.runHealthChecks(ctx, state); err != nil {
-		return err
+
+	// Network node services (skip for mlnode-only)
+	if !state.IsMLNodeOnly() {
+		if err := p.startNetworkNode(ctx, state); err != nil {
+			return err
+		}
+		if err := p.monitorSync(ctx, state); err != nil {
+			return err
+		}
 	}
 
-	p.showSummary(state)
+	// ML node services (skip for network-only)
+	if !state.IsNetworkOnly() {
+		if err := p.preDownloadModel(ctx, state); err != nil {
+			return err
+		}
+		if err := p.startMLNode(ctx, state); err != nil {
+			return err
+		}
+	}
+
+	// Health checks (only when Admin API is available — not for mlnode-only)
+	if !state.IsMLNodeOnly() {
+		if err := p.runHealthChecks(ctx, state); err != nil {
+			return err
+		}
+	}
+
+	p.showSummary(state, nodeType)
 	return nil
 }
 
@@ -371,12 +389,41 @@ func (p *Deploy) runHealthChecks(ctx context.Context, state *config.State) error
 	return nil
 }
 
-func (p *Deploy) showSummary(state *config.State) {
+func (p *Deploy) showSummary(state *config.State, nodeType string) {
 	ui.Header("Deployment Summary")
-	ui.Detail("Network Node API: http://%s:%d", state.PublicIP, state.APIPort)
-	ui.Detail("P2P Endpoint: tcp://%s:%d", state.PublicIP, state.P2PPort)
-	ui.Detail("ML Node: http://127.0.0.1:8080 (localhost only)")
-	ui.Detail("Admin API: http://127.0.0.1:9200 (localhost only)")
+
+	switch nodeType {
+	case config.NodeTypeNetwork:
+		ui.Detail("Network Node API: http://%s:%d", state.PublicIP, state.APIPort)
+		ui.Detail("P2P Endpoint: tcp://%s:%d", state.PublicIP, state.P2PPort)
+		ui.Detail("Admin API: http://127.0.0.1:9200 (localhost only)")
+		ui.Detail("ML Callback: http://%s:9100 (accessible from private network)", state.PublicIP)
+
+		ui.Header("Next Steps")
+		ui.Info("1. Registration will follow in the next phase")
+		ui.Info("2. Deploy ML nodes on GPU servers with: gonka-nop setup --type mlnode")
+		ui.Info("3. Register ML nodes with: gonka-nop ml-node add")
+		ui.Info("4. Monitor status: gonka-nop status")
+
+	case config.NodeTypeMLNode:
+		ui.Detail("ML Node: %s:%d (inference)", state.PublicIP, state.InferencePort)
+		ui.Detail("ML Node: %s:%d (PoC/management)", state.PublicIP, state.PoCPort)
+
+		ui.Header("Next Steps")
+		ui.Info("1. Register this ML node from your NETWORK NODE server")
+		ui.Info("2. Check GPU status: gonka-nop gpu-info")
+
+	default:
+		ui.Detail("Network Node API: http://%s:%d", state.PublicIP, state.APIPort)
+		ui.Detail("P2P Endpoint: tcp://%s:%d", state.PublicIP, state.P2PPort)
+		ui.Detail("ML Node: http://127.0.0.1:8080 (localhost only)")
+		ui.Detail("Admin API: http://127.0.0.1:9200 (localhost only)")
+
+		ui.Header("Next Steps")
+		ui.Info("1. Registration will follow in the next phase")
+		ui.Info("2. Monitor status: gonka-nop status")
+		ui.Info("3. Check ML node: gonka-nop ml-node list")
+	}
 
 	ui.Header("Security")
 	if state.FirewallConfigured {
@@ -385,12 +432,6 @@ func (p *Deploy) showSummary(state *config.State) {
 		ui.Warn("Firewall: Not configured. Please set up DOCKER-USER iptables rules manually")
 	}
 	ui.Detail("DDoS: Proxy route blocking enabled by default")
-	ui.Detail("Ports: Internal services should be bound to 127.0.0.1")
-
-	ui.Header("Next Steps")
-	ui.Info("1. Registration will follow in the next phase")
-	ui.Info("2. Monitor status: gonka-nop status")
-	ui.Info("3. Check ML node: gonka-nop ml-node list")
 }
 
 // checkUpgradeHandlerError checks node container logs for upgrade handler errors.

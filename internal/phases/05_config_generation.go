@@ -62,17 +62,32 @@ func (p *ConfigGeneration) Run(_ context.Context, state *config.State) error {
 	}
 	state.PublicIP = publicIP
 
+	// For network-only: ask for private IP that MLNodes will use to reach port 9100
+	if state.IsNetworkOnly() && state.NetworkNodeIP == "" {
+		privateIP, promptErr := ui.Input("Enter private IP for ML node connectivity (PoC callback on port 9100):", state.PublicIP)
+		if promptErr != nil {
+			return promptErr
+		}
+		if privateIP == "" {
+			privateIP = state.PublicIP
+		}
+		state.NetworkNodeIP = privateIP
+		ui.Detail("PoC callback URL will use: %s:9100", state.NetworkNodeIP)
+	}
+
 	// Port configuration — default or custom (for NAT/port remapping)
 	if err := configureExternalPorts(state); err != nil {
 		return err
 	}
 
-	// Get HuggingFace home directory
-	hfHome, err := ui.Input("HuggingFace cache directory:", defaultHFHome)
-	if err != nil {
-		return err
+	// Get HuggingFace home directory (not needed for network-only)
+	if !state.IsNetworkOnly() {
+		hfHome, err := ui.Input("HuggingFace cache directory:", defaultHFHome)
+		if err != nil {
+			return err
+		}
+		state.HFHome = hfHome
 	}
-	state.HFHome = hfHome
 
 	// Create output directory
 	err = ui.WithSpinner("Creating output directory", func() error {
@@ -109,23 +124,28 @@ func (p *ConfigGeneration) Run(_ context.Context, state *config.State) error {
 	}
 	ui.Detail("Created: %s/docker-compose.yml", state.OutputDir)
 
-	// Generate nginx.conf for mlnode proxy
-	err = ui.WithSpinner("Generating nginx.conf", func() error {
-		return generateNginxConf(state)
-	})
-	if err != nil {
-		return err
-	}
-	ui.Detail("Created: %s/nginx.conf", state.OutputDir)
+	// Generate mlnode-related configs (skip for network-only topology)
+	if !state.IsNetworkOnly() {
+		// Generate nginx.conf for mlnode proxy
+		err = ui.WithSpinner("Generating nginx.conf", func() error {
+			return generateNginxConf(state)
+		})
+		if err != nil {
+			return err
+		}
+		ui.Detail("Created: %s/nginx.conf", state.OutputDir)
 
-	// Generate docker-compose.mlnode.yml
-	err = ui.WithSpinner("Generating docker-compose.mlnode.yml", func() error {
-		return generateMLNodeCompose(state)
-	})
-	if err != nil {
-		return err
+		// Generate docker-compose.mlnode.yml
+		err = ui.WithSpinner("Generating docker-compose.mlnode.yml", func() error {
+			return generateMLNodeCompose(state)
+		})
+		if err != nil {
+			return err
+		}
+		ui.Detail("Created: %s/docker-compose.mlnode.yml", state.OutputDir)
+	} else {
+		ui.Info("Skipping ML node configs (network-only topology)")
 	}
-	ui.Detail("Created: %s/docker-compose.mlnode.yml", state.OutputDir)
 
 	// Generate env-override for testnet
 	if state.IsTestNet {
@@ -358,7 +378,7 @@ SEED_NODE_RPC_URL=%s
 SEED_NODE_P2P_URL=%s
 
 # Internal routing
-DAPI_API__POC_CALLBACK_URL=http://api:9100
+DAPI_API__POC_CALLBACK_URL=%s
 DAPI_CHAIN_NODE__URL=http://node:26657
 DAPI_CHAIN_NODE__P2P_URL=tcp://node:26656
 
@@ -406,6 +426,7 @@ RPC_SERVER_URL_2=%s
 		seedAPIURL,
 		seedRPCURL,
 		seedP2PURL,
+		pocCallbackURL(state),
 		ethereumNetwork,
 		beaconStateURL,
 		snapshotInterval,
@@ -624,8 +645,9 @@ services:
       - DAPI_API__ML_SERVER_PORT=9100
       - DAPI_API__ADMIN_SERVER_PORT=9200
     ports:
-      # SECURITY: Bind internal APIs to localhost only
-      - "127.0.0.1:9100:9100"  # ML callback (internal)
+      # Port 9100: ML callback. Bound to localhost for same-server setups;
+      # exposed on all interfaces for network-only topology (remote MLNodes need access).
+      - "%s:9100"  # ML callback
       - "127.0.0.1:9200:9200"  # Admin API (internal)
     restart: always
     env_file:
@@ -685,6 +707,7 @@ services:
       - "5173"
     restart: unless-stopped
 `, v.TMKMS, v.Node, persistentPeers, internalP2PPort(state), v.API,
+		apiPort9100Binding(state),
 		v.Bridge, ethereumNetwork, beaconStateURL, v.Proxy, v.Explorer)
 
 	return os.WriteFile(filepath.Join(state.OutputDir, "docker-compose.yml"), []byte(content), 0600)
@@ -962,12 +985,53 @@ func buildEnforcedModelArgs(state *config.State) string {
 	return strings.Join(args, " ")
 }
 
+// apiPort9100Binding returns the Docker port binding for the API's ML callback port.
+// For full mode: "127.0.0.1:9100" (localhost only, MLNode is on same Docker network).
+// For network-only: "9100" (exposed on all interfaces so remote MLNodes can reach it).
+func apiPort9100Binding(state *config.State) string {
+	if state.IsNetworkOnly() {
+		return "9100"
+	}
+	return "127.0.0.1:9100"
+}
+
+// pocCallbackURL returns the PoC callback URL based on topology.
+// For full mode (same server): http://api:9100 (Docker DNS).
+// For network-only: http://<private-ip>:9100 (remote MLNodes must reach it).
+func pocCallbackURL(state *config.State) string {
+	if state.IsNetworkOnly() {
+		// Network-only: remote MLNodes need to reach port 9100 via private network.
+		// Use the private IP (not public) so the URL is routable from MLNode servers.
+		ip := state.NetworkNodeIP
+		if ip == "" {
+			ip = state.PublicIP // fallback if private IP not set
+		}
+		return fmt.Sprintf("http://%s:9100", ip)
+	}
+	// Full mode (same server): Docker internal DNS resolves "api" to the container.
+	return "http://api:9100"
+}
+
 // buildComposeFileList returns the ordered list of compose files for the deployment.
 func buildComposeFileList(state *config.State) []string {
-	files := []string{"docker-compose.yml"}
-	if state.IsTestNet {
-		files = append(files, "docker-compose.env-override.yml")
+	switch state.EffectiveNodeType() {
+	case config.NodeTypeNetwork:
+		// Network-only: no mlnode compose
+		files := []string{"docker-compose.yml"}
+		if state.IsTestNet {
+			files = append(files, "docker-compose.env-override.yml")
+		}
+		return files
+	case config.NodeTypeMLNode:
+		// MLNode-only: no network compose (handled by 08_mlnode_config.go)
+		return []string{"docker-compose.mlnode.yml"}
+	default:
+		// Full: all compose files
+		files := []string{"docker-compose.yml"}
+		if state.IsTestNet {
+			files = append(files, "docker-compose.env-override.yml")
+		}
+		files = append(files, "docker-compose.mlnode.yml")
+		return files
 	}
-	files = append(files, "docker-compose.mlnode.yml")
-	return files
 }
