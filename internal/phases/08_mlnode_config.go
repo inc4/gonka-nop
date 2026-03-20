@@ -66,10 +66,10 @@ func (p *MLNodeConfig) Run(_ context.Context, state *config.State) error {
 	if state.PublicIP == "" {
 		val, err := ui.Input("Enter this ML node's IP (reachable from network node):", "")
 		if err != nil {
-			return fmt.Errorf("ML node IP: %w", err)
+			return fmt.Errorf("ml node IP: %w", err)
 		}
 		if val == "" {
-			return fmt.Errorf("ML node IP is required (network node must reach this server)")
+			return fmt.Errorf("ml node IP is required (network node must reach this server)")
 		}
 		state.PublicIP = val
 	}
@@ -79,7 +79,7 @@ func (p *MLNodeConfig) Run(_ context.Context, state *config.State) error {
 	if state.HFHome == "" {
 		val, err := ui.Input("Enter HuggingFace cache directory:", DefaultHFHome)
 		if err != nil {
-			return fmt.Errorf("HF home: %w", err)
+			return fmt.Errorf("hf home: %w", err)
 		}
 		if val == "" {
 			val = DefaultHFHome

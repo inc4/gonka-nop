@@ -265,7 +265,7 @@ func applyUpdates(ctx context.Context, state *config.State, diffs []VersionDiff,
 	// Safe MLNode rollout: disable → update compose → pull → recreate → wait → enable
 	if hasMLNode {
 		if err := safeMLNodeUpdate(ctx, state, latest); err != nil {
-			return fmt.Errorf("ML node update failed: %w", err)
+			return fmt.Errorf("ml node update failed: %w", err)
 		}
 	}
 

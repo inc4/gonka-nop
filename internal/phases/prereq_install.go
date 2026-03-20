@@ -91,7 +91,7 @@ func installKernelHeaders(ctx context.Context, useSudo bool) error {
 // installDocker installs Docker Engine on Debian/Ubuntu systems.
 func installDocker(ctx context.Context, distro config.Distro, useSudo bool) error {
 	if distro.Family != "debian" {
-		return fmt.Errorf("Docker auto-install only supported on Debian/Ubuntu (detected: %s)", distro.ID)
+		return fmt.Errorf("docker auto-install only supported on Debian/Ubuntu (detected: %s)", distro.ID)
 	}
 
 	steps := []struct {
@@ -154,7 +154,7 @@ func installDocker(ctx context.Context, distro config.Distro, useSudo bool) erro
 	// Verify
 	out, err := runCmd(ctx, "docker", "--version")
 	if err != nil {
-		return fmt.Errorf("Docker install completed but verification failed: %w", err)
+		return fmt.Errorf("docker install completed but verification failed: %w", err)
 	}
 	ver, _ := ParseDockerVersion(out)
 	ui.Success("Docker %s installed", ver)
@@ -164,7 +164,7 @@ func installDocker(ctx context.Context, distro config.Distro, useSudo bool) erro
 // installNVIDIADriver installs the NVIDIA driver on Debian/Ubuntu systems.
 func installNVIDIADriver(ctx context.Context, distro config.Distro, useSudo bool) error {
 	if distro.Family != "debian" {
-		return fmt.Errorf("NVIDIA driver auto-install only supported on Debian/Ubuntu (detected: %s)", distro.ID)
+		return fmt.Errorf("nvidia driver auto-install only supported on Debian/Ubuntu (detected: %s)", distro.ID)
 	}
 
 	// Pre-flight: Secure Boot
@@ -173,7 +173,7 @@ func installNVIDIADriver(ctx context.Context, distro config.Distro, useSudo bool
 		ui.Detail("Disable Secure Boot in BIOS/UEFI or enroll MOK keys before proceeding")
 		install, _ := ui.Confirm("Continue anyway?", false)
 		if !install {
-			return fmt.Errorf("NVIDIA driver installation aborted (Secure Boot enabled)")
+			return fmt.Errorf("nvidia driver installation aborted (Secure Boot enabled)")
 		}
 	}
 
@@ -226,7 +226,7 @@ func installNVIDIADriver(ctx context.Context, distro config.Distro, useSudo bool
 	if err != nil {
 		ui.Warn("nvidia-smi not available after install — a reboot may be required")
 		ui.Detail("Run: sudo reboot")
-		return fmt.Errorf("NVIDIA driver installed but nvidia-smi failed (reboot required): %w", err)
+		return fmt.Errorf("nvidia driver installed but nvidia-smi failed (reboot required): %w", err)
 	}
 	ver := strings.TrimSpace(strings.Split(strings.TrimSpace(out), "\n")[0])
 	ui.Success("NVIDIA driver %s installed", ver)
@@ -236,7 +236,7 @@ func installNVIDIADriver(ctx context.Context, distro config.Distro, useSudo bool
 // installContainerToolkit installs the NVIDIA Container Toolkit and configures Docker.
 func installContainerToolkit(ctx context.Context, distro config.Distro, useSudo bool) error {
 	if distro.Family != "debian" {
-		return fmt.Errorf("Container Toolkit auto-install only supported on Debian/Ubuntu (detected: %s)", distro.ID)
+		return fmt.Errorf("container toolkit auto-install only supported on Debian/Ubuntu (detected: %s)", distro.ID)
 	}
 
 	steps := []struct {
@@ -289,7 +289,7 @@ func installContainerToolkit(ctx context.Context, distro config.Distro, useSudo 
 	// Verify
 	out, err := runCmd(ctx, "nvidia-ctk", "--version")
 	if err != nil {
-		return fmt.Errorf("Container Toolkit installed but verification failed: %w", err)
+		return fmt.Errorf("container toolkit installed but verification failed: %w", err)
 	}
 	ui.Success("NVIDIA Container Toolkit installed (%s)", strings.TrimSpace(out))
 	return nil
