@@ -126,12 +126,14 @@ func (p *MLNodeConfig) Run(_ context.Context, state *config.State) error {
 
 // generateMLNodeCompose generates docker-compose.mlnode.yml for standalone ML node.
 func (p *MLNodeConfig) generateMLNodeCompose(state *config.State) error {
-	mlnodeImage := DefaultMLNodeImage + ":" + DefaultMLNodeImageTag
-	if state.MLNodeImageTag != "" {
-		mlnodeImage = DefaultMLNodeImage + ":" + state.MLNodeImageTag
-	} else if state.Versions.MLNode != "" {
-		mlnodeImage = DefaultMLNodeImage + ":" + state.Versions.MLNode
+	// Image tag priority: GitHub version (most current) > GPU detection > hardcoded fallback
+	mlnodeTag := DefaultMLNodeImageTag
+	if state.Versions.MLNode != "" {
+		mlnodeTag = state.Versions.MLNode
+	} else if state.MLNodeImageTag != "" {
+		mlnodeTag = state.MLNodeImageTag
 	}
+	mlnodeImage := DefaultMLNodeImage + ":" + mlnodeTag
 
 	nginxImage := "nginx:1.28.0"
 	if state.Versions.Nginx != "" {
@@ -183,33 +185,66 @@ func (p *MLNodeConfig) generateMLNodeCompose(state *config.State) error {
 }
 
 // generateNginxConf generates nginx.conf for local routing to mlnode-308.
+// Uses the official Gonka nginx template with version-prefix stripping
+// (e.g., /v3.0.8/api/v1/state → /api/v1/state) and long timeouts.
 func (p *MLNodeConfig) generateNginxConf(state *config.State) error {
-	content := `events {
-    worker_connections 1024;
-}
+	content := `events {}
 
 http {
     resolver 127.0.0.11 valid=10s;
+    resolver_timeout 5s;
 
-    server {
-        listen 5000;
-        location / {
-            proxy_pass http://mlnode-308:5000;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_read_timeout 600s;
-            proxy_send_timeout 600s;
-        }
+    upstream mlnode_v308 {
+        zone mlnode_v308 64k;
+        server mlnode-308:8080 resolve;
     }
 
     server {
         listen 8080;
-        location / {
-            proxy_pass http://mlnode-308:8080;
+        client_max_body_size 0;
+        proxy_connect_timeout 24h;
+        proxy_send_timeout 24h;
+        proxy_read_timeout 24h;
+
+        location /v3.0.8/ {
+            proxy_pass http://mlnode_v308/;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
-            proxy_read_timeout 600s;
-            proxy_send_timeout 600s;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+
+        location / {
+            proxy_pass http://mlnode_v308/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+    }
+
+    upstream mlnode_v308_port5000 {
+        zone mlnode_v308_port5000 64k;
+        server mlnode-308:5000 resolve;
+    }
+
+    server {
+        listen 5000;
+        client_max_body_size 0;
+        proxy_connect_timeout 24h;
+        proxy_send_timeout 24h;
+        proxy_read_timeout 24h;
+
+        location /v3.0.8/ {
+            proxy_pass http://mlnode_v308_port5000/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+
+        location / {
+            proxy_pass http://mlnode_v308_port5000/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         }
     }
 }
