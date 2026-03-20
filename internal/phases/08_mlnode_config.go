@@ -149,9 +149,12 @@ func (p *MLNodeConfig) generateMLNodeCompose(state *config.State) error {
 	content := fmt.Sprintf(`services:
   mlnode-308:
     image: %s
-    restart: unless-stopped
+    hostname: mlnode-308
+    restart: always
+    ipc: host
+    command: uvicorn api.app:app --host=0.0.0.0 --port=8080
     volumes:
-      - %s:/root/.cache/huggingface
+      - %s:/root/.cache
     deploy:
       resources:
         reservations:
@@ -160,19 +163,18 @@ func (p *MLNodeConfig) generateMLNodeCompose(state *config.State) error {
               count: all
               capabilities: [gpu]
     environment:
-      - HF_HOME=/root/.cache/huggingface
+      - HF_HOME=/root/.cache
       - VLLM_ATTENTION_BACKEND=%s
 
   inference:
     image: %s
-    restart: unless-stopped
+    hostname: inference
+    restart: always
     ports:
       - "%s:%d:5000"
       - "%s:%d:8080"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on:
-      - mlnode-308
 `, mlnodeImage, state.HFHome, backend, nginxImage, bindIP, state.InferencePort, bindIP, state.PoCPort)
 
 	outPath := filepath.Join(state.OutputDir, "docker-compose.mlnode.yml")
