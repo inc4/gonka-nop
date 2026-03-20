@@ -39,6 +39,13 @@ type Distro struct {
 	Family  string `json:"family"`  // "debian", "rhel"
 }
 
+// Node topology constants
+const (
+	NodeTypeFull    = "full"    // Network node + ML node on same server (default)
+	NodeTypeNetwork = "network" // Network node only (chain services, no GPU)
+	NodeTypeMLNode  = "mlnode"  // ML node only (GPU inference, connects to remote network node)
+)
+
 // State holds the persistent state of the setup process
 type State struct {
 	// Setup progress
@@ -116,6 +123,11 @@ type State struct {
 	// Security
 	FirewallConfigured bool `json:"firewall_configured,omitempty"`
 	DDoSProtection     bool `json:"ddos_protection,omitempty"`
+
+	// Topology
+	NodeType       string `json:"node_type,omitempty"`        // "full", "network", "mlnode" (empty = "full")
+	NetworkNodeURL string `json:"network_node_url,omitempty"` // Admin API URL of network node (for mlnode-only)
+	NetworkNodeIP  string `json:"network_node_ip,omitempty"`  // Private IP of network node (for PoC callback)
 
 	// System
 	Distro        Distro `json:"distro,omitempty"`
@@ -254,4 +266,26 @@ func (s *State) Reset() {
 	s.Distro = Distro{}
 	s.DiskFreeGB = 0
 	s.AutoUpdateOff = false
+	s.NodeType = ""
+	s.NetworkNodeURL = ""
+	s.NetworkNodeIP = ""
+}
+
+// EffectiveNodeType returns the node topology type, defaulting to "full"
+// for backwards compatibility with state files that don't have NodeType set.
+func (s *State) EffectiveNodeType() string {
+	if s.NodeType == "" {
+		return NodeTypeFull
+	}
+	return s.NodeType
+}
+
+// IsNetworkOnly returns true if this is a network-only node (no GPU).
+func (s *State) IsNetworkOnly() bool {
+	return s.EffectiveNodeType() == NodeTypeNetwork
+}
+
+// IsMLNodeOnly returns true if this is an MLNode-only setup (no chain services).
+func (s *State) IsMLNodeOnly() bool {
+	return s.EffectiveNodeType() == NodeTypeMLNode
 }
