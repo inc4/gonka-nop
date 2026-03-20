@@ -15,6 +15,8 @@ import (
 	"github.com/inc4/gonka-nop/internal/config"
 )
 
+const testUpgradeVersion = "v0.2.10"
+
 func TestParseUpgradeHandlerError(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -24,13 +26,13 @@ func TestParseUpgradeHandlerError(t *testing.T) {
 		{
 			name:   "single match",
 			input:  `ERR error during handshake: upgrade handler is missing for v0.2.10 upgrade plan`,
-			expect: "v0.2.10",
+			expect: testUpgradeVersion,
 		},
 		{
 			name: "multiple matches returns last",
 			input: `ERR upgrade handler is missing for v0.2.8 upgrade plan
 				ERR upgrade handler is missing for v0.2.10 upgrade plan`,
-			expect: "v0.2.10",
+			expect: testUpgradeVersion,
 		},
 		{
 			name:   "no match",
@@ -53,7 +55,7 @@ func TestParseUpgradeHandlerError(t *testing.T) {
 node  | ERR CONSENSUS FAILURE!!! err="error during handshake"
 node  | panic: upgrade handler is missing for v0.2.10 upgrade plan
 node  | goroutine 1 [running]:`,
-			expect: "v0.2.10",
+			expect: testUpgradeVersion,
 		},
 	}
 
@@ -77,7 +79,7 @@ func TestParseUpgradeInfoJSON(t *testing.T) {
 		{
 			name:     "valid upgrade info",
 			content:  `{"name":"v0.2.10","height":2500000}`,
-			wantName: "v0.2.10",
+			wantName: testUpgradeVersion,
 		},
 		{
 			name:    "empty name",
@@ -128,11 +130,11 @@ func TestCheckCosmovisorSymlinks(t *testing.T) {
 			setup: func(t *testing.T, dir string) {
 				t.Helper()
 				cosmoDir := filepath.Join(dir, ".inference", "cosmovisor")
-				upgradeDir := filepath.Join(cosmoDir, "upgrades", "v0.2.10", "bin")
+				upgradeDir := filepath.Join(cosmoDir, "upgrades", testUpgradeVersion, "bin")
 				if err := os.MkdirAll(upgradeDir, 0o750); err != nil {
 					t.Fatal(err)
 				}
-				_ = os.Symlink(filepath.Join(cosmoDir, "upgrades", "v0.2.10"),
+				_ = os.Symlink(filepath.Join(cosmoDir, "upgrades", testUpgradeVersion),
 					filepath.Join(cosmoDir, "current"))
 			},
 			wantCount: 0,
@@ -341,7 +343,7 @@ func TestUpgradeNameToReleaseTags(t *testing.T) {
 	}{
 		{
 			name:     "simple version",
-			input:    "v0.2.10",
+			input:    testUpgradeVersion,
 			expected: []string{"release/v0.2.10", "release/v0.2.10-post1"},
 		},
 		{
@@ -405,13 +407,13 @@ func TestFixCosmovisorSymlink(t *testing.T) {
 	dir := t.TempDir()
 
 	cosmoDir := filepath.Join(dir, ".inference", "cosmovisor")
-	upgradeDir := filepath.Join(cosmoDir, "upgrades", "v0.2.10", "bin")
+	upgradeDir := filepath.Join(cosmoDir, "upgrades", testUpgradeVersion, "bin")
 	if err := os.MkdirAll(upgradeDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 
 	symlinkPath := filepath.Join(cosmoDir, "current")
-	targetDir := filepath.Join(cosmoDir, "upgrades", "v0.2.10")
+	targetDir := filepath.Join(cosmoDir, "upgrades", testUpgradeVersion)
 
 	state := &config.State{OutputDir: dir, UseSudo: false}
 
@@ -613,7 +615,7 @@ func TestDiagnosisStruct(t *testing.T) {
 		Severity:    "critical",
 		Description: "Node in restart loop: upgrade handler is missing for v0.2.10",
 		FixAction:   "Download v0.2.10 binaries",
-		UpgradeName: "v0.2.10",
+		UpgradeName: testUpgradeVersion,
 	}
 
 	if d.ID != "missing_upgrade_handler" {
@@ -622,7 +624,7 @@ func TestDiagnosisStruct(t *testing.T) {
 	if d.Severity != "critical" {
 		t.Errorf("unexpected severity: %s", d.Severity)
 	}
-	if d.UpgradeName != "v0.2.10" {
+	if d.UpgradeName != testUpgradeVersion {
 		t.Errorf("unexpected upgrade name: %s", d.UpgradeName)
 	}
 }
@@ -630,10 +632,10 @@ func TestDiagnosisStruct(t *testing.T) {
 func TestRepairPlan(t *testing.T) {
 	plan := &RepairPlan{
 		Diagnoses: []Diagnosis{
-			{ID: "missing_upgrade_handler", UpgradeName: "v0.2.10"},
-			{ID: "stale_upgrade_info", UpgradeName: "v0.2.10"},
+			{ID: "missing_upgrade_handler", UpgradeName: testUpgradeVersion},
+			{ID: "stale_upgrade_info", UpgradeName: testUpgradeVersion},
 		},
-		UpgradeName: "v0.2.10",
+		UpgradeName: testUpgradeVersion,
 		NeedsBinary: true,
 	}
 
@@ -643,7 +645,7 @@ func TestRepairPlan(t *testing.T) {
 	if !plan.NeedsBinary {
 		t.Error("expected NeedsBinary=true")
 	}
-	if plan.UpgradeName != "v0.2.10" {
+	if plan.UpgradeName != testUpgradeVersion {
 		t.Errorf("expected UpgradeName=v0.2.10, got %s", plan.UpgradeName)
 	}
 }
@@ -824,8 +826,8 @@ func TestCheckUpgradeInfo_ReturnsAssets(t *testing.T) {
 	if diag == nil {
 		t.Fatal("expected diagnosis, got nil")
 	}
-	if diag.UpgradeName != "v0.2.10" {
-		t.Errorf("UpgradeName = %q, want %q", diag.UpgradeName, "v0.2.10")
+	if diag.UpgradeName != testUpgradeVersion {
+		t.Errorf("UpgradeName = %q, want %q", diag.UpgradeName, testUpgradeVersion)
 	}
 
 	if len(assets) != 2 {
@@ -873,8 +875,8 @@ func TestCheckUpgradeInfo_NoInfoField(t *testing.T) {
 	if diag == nil {
 		t.Fatal("expected diagnosis, got nil")
 	}
-	if diag.UpgradeName != "v0.2.10" {
-		t.Errorf("UpgradeName = %q, want %q", diag.UpgradeName, "v0.2.10")
+	if diag.UpgradeName != testUpgradeVersion {
+		t.Errorf("UpgradeName = %q, want %q", diag.UpgradeName, testUpgradeVersion)
 	}
 
 	// No info field → no assets (will fall back to GitHub search)
@@ -902,7 +904,7 @@ func TestBuildDirectDownloadAssets(t *testing.T) {
 		repairGHDirectDownload = ts.URL + "/"
 		defer func() { repairGHDirectDownload = origBase }()
 
-		assets, err := buildDirectDownloadAssets(t.Context(), "v0.2.10")
+		assets, err := buildDirectDownloadAssets(t.Context(), testUpgradeVersion)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
