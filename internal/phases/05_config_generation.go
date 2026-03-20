@@ -444,6 +444,12 @@ RPC_SERVER_URL_2=%s
 }
 
 func generateNodeConfig(state *config.State) error {
+	// Network-only: generate empty node-config.json.
+	// ML nodes will be registered dynamically via Admin API (ml-node add).
+	if state.IsNetworkOnly() {
+		return os.WriteFile(filepath.Join(state.OutputDir, "node-config.json"), []byte("[]\n"), 0600)
+	}
+
 	modelName := state.SelectedModel
 	if modelName == "" {
 		modelName = defaultModel
