@@ -26,46 +26,20 @@ gonka-nop status     # Check node health, epoch, PoC weight, miss rate
 gonka-nop update     # Safe rolling update of containers
 ```
 
-## What It Does
+## Deployment Topologies
 
-Gonka NOP automates the entire lifecycle of a Gonka validator node:
+Gonka NOP supports three deployment topologies via the `--type` flag:
 
-**Setup (6 phases):**
-1. **Prerequisites** -- Detects and installs Docker, NVIDIA drivers, Container Toolkit, Fabric Manager
-2. **GPU Detection** -- Identifies GPUs, architecture (sm_80-sm_120), NVLink topology, recommends TP/PP
-3. **Network Select** -- Mainnet or testnet, fetches latest image versions from GitHub
-4. **Key Management** -- Quick (all on server) or Secure (cold key on separate machine) workflow
-5. **Config Generation** -- docker-compose.yml, node-config.json, config.env with security defaults
-6. **Deploy** -- Container orchestration, blockchain sync monitoring, model download, health checks
+### Full (default) -- Single server
 
-**Day-2 Operations:**
-- Real-time status with epoch participation, PoC weight, miss rate, block lag
-- Safe update rollout (disable ML node, pull, recreate, wait for model load, re-enable)
-- Repair stuck nodes (detect missing upgrade handler, download correct binaries)
-- ML node management (list, status, enable, disable)
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `setup` | Interactive setup wizard (full node deployment) |
-| `status` | Node health: blockchain, epoch, MLNode, security checks |
-| `gpu-info` | Detected GPUs with TP/PP/model recommendation |
-| `update` | Safe rolling update (`--check` for dry run, `--service` for specific) |
-| `repair` | Fix stuck nodes (missing upgrade binaries) |
-| `register` | On-chain registration and ML permissions |
-| `ml-node` | ML node management (list, status, enable, disable) |
-| `download-model` | Pre-download model weights before setup |
-| `reset` | Stop containers and clean up |
-| `cleanup` | Recover disk space |
-| `version` | Print version info |
-
-## Non-Interactive Mode
-
-For automated deployments (CI/CD, batch provisioning):
+Network node + ML node on the same server. Best for getting started.
 
 ```bash
-gonka-nop setup --yes \
+# Interactive
+gonka-nop setup
+
+# Non-interactive
+gonka-nop setup --yes --type full \
   --network mainnet \
   --key-workflow quick \
   --key-name my-key \
@@ -73,6 +47,142 @@ gonka-nop setup --yes \
   --public-ip 1.2.3.4 \
   --hf-home /data/hf
 ```
+
+### Network only -- Chain services, no GPU
+
+Runs the blockchain node, API, proxy, and supporting services on a CPU-only server. ML nodes connect remotely.
+
+```bash
+# Interactive
+gonka-nop setup --type network
+
+# Non-interactive
+gonka-nop setup --yes --type network \
+  --network mainnet \
+  --key-workflow quick \
+  --key-name my-key \
+  --keyring-password "pass" \
+  --public-ip 203.0.113.10
+```
+
+What happens:
+- Installs Docker (skips NVIDIA drivers)
+- Generates keys, config.env, docker-compose.yml (no mlnode compose)
+- Exposes port 9100 for PoC callback from remote ML nodes
+- Starts chain services and waits for blockchain sync
+
+### ML node only -- GPU inference, no chain
+
+Runs the vLLM inference engine on a dedicated GPU server. Connects to a remote network node.
+
+```bash
+# Interactive
+gonka-nop setup --type mlnode
+
+# Non-interactive
+gonka-nop setup --yes --type mlnode \
+  --network mainnet \
+  --network-node-url http://203.0.113.10:9200 \
+  --public-ip 10.0.1.50 \
+  --hf-home /data/hf
+```
+
+What happens:
+- Installs Docker + NVIDIA drivers + Container Toolkit + Fabric Manager
+- Detects GPUs, calculates optimal TP/PP
+- Generates docker-compose.mlnode.yml, nginx.conf, config.env
+- Downloads model weights and starts ML node containers
+- Generates `mlnode-registration.json` for registering with the network node
+
+### Multi-server workflow
+
+```
+                          +-----------------------+
+                          |  Network Node (.10)   |
+                          |  --type network       |
+                          |  Chain + API + Proxy  |
+                          |  Port 9100 exposed    |
+                          +----------+------------+
+                                     |
+                            private network
+                                     |
+              +----------------------+----------------------+
+              |                                             |
+   +----------v-----------+                  +--------------v-------+
+   |  ML Node A (.50)     |                  |  ML Node B (.51)     |
+   |  --type mlnode        |                  |  --type mlnode        |
+   |  8x H100, TP=4       |                  |  8x A100, TP=4       |
+   |  2x vLLM instances   |                  |  2x vLLM instances   |
+   +----------------------+                  +----------------------+
+```
+
+**Step 1:** Deploy network node
+
+```bash
+# On the network node server (no GPU needed)
+gonka-nop setup --type network -y --network mainnet \
+  --key-workflow quick --key-name my-key --keyring-password "pass" \
+  --public-ip 203.0.113.10
+```
+
+**Step 2:** Deploy ML node(s)
+
+```bash
+# On each GPU server
+gonka-nop setup --type mlnode -y --network mainnet \
+  --network-node-url http://203.0.113.10:9200 \
+  --public-ip 10.0.1.50 --hf-home /data/hf
+```
+
+**Step 3:** Register ML node(s) from the network node
+
+```bash
+# Option A: Use the generated registration file
+gonka-nop ml-node add --config /path/to/mlnode-registration.json
+
+# Option B: Interactive registration
+gonka-nop ml-node add
+
+# Verify
+gonka-nop ml-node list
+```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `setup` | Interactive setup wizard (full node deployment) |
+| `setup --type network` | Network-only setup (chain services, no GPU) |
+| `setup --type mlnode` | ML node only (GPU inference, remote network node) |
+| `status` | Node health: blockchain, epoch, MLNode, security checks |
+| `gpu-info` | Detected GPUs with TP/PP/model recommendation |
+| `update` | Safe rolling update (`--check` for dry run, `--service` for specific) |
+| `repair` | Fix stuck nodes (missing upgrade binaries) |
+| `register` | On-chain registration and ML permissions |
+| `ml-node list` | List registered ML nodes with status |
+| `ml-node add` | Register a new ML node (from file or interactive) |
+| `ml-node status` | Detailed ML node status |
+| `ml-node enable/disable` | Enable or disable an ML node |
+| `download-model` | Pre-download model weights before setup |
+| `reset` | Stop containers and clean up |
+| `cleanup` | Recover disk space |
+| `version` | Print version info |
+
+## Setup Flags
+
+| Flag | Description | Used in |
+|------|-------------|---------|
+| `--type` | Node topology: `full`, `network`, `mlnode` | All |
+| `--network` | Network: `mainnet` or `testnet` | All |
+| `--network-node-url` | Admin API URL of network node | `mlnode` |
+| `--key-workflow` | Key management: `quick` or `secure` | `full`, `network` |
+| `--key-name` | Base name for keys | `full`, `network` |
+| `--keyring-password` | Keyring password | `full`, `network` |
+| `--public-ip` | Server public/private IP | All |
+| `--hf-home` | HuggingFace cache directory | `full`, `mlnode` |
+| `--account-pubkey` | Account public key (secure workflow) | `full`, `network` |
+| `-y, --yes` | Non-interactive mode | All |
+| `-o, --output` | Output directory (default: `./gonka-node`) | All |
 
 ## Manual vs Automated
 
@@ -87,13 +197,16 @@ gonka-nop setup --yes \
 | Check node status | Query 5+ API endpoints, parse JSON | `gonka-nop status` (unified dashboard) |
 | Update MLNode | 6-step manual process (disable, pull, recreate, wait, enable) | `gonka-nop update` |
 | Fix stuck node | Search GitHub releases, download binaries, place in cosmovisor dirs | `gonka-nop repair` |
+| Multi-server ML node | Clone repo, edit compose, download model, register via curl | `gonka-nop setup --type mlnode` + `ml-node add` |
 
 ## Security Defaults
 
-- Internal ports (5050, 8080, 9100, 9200) bound to `127.0.0.1`
+- Internal ports (5050, 8080, 9100, 9200) bound to `127.0.0.1` in full mode
+- Port 9100 exposed for network-only topology (remote ML nodes need PoC callback access)
 - DDoS protection: `GONKA_API_BLOCKED_ROUTES=poc-batches training`
 - Chain API/RPC/GRPC disabled by default
 - `gpu-memory-utilization` capped at 0.88-0.94 (not 0.99 -- prevents OOM)
+- ML node ports bound to server IP, not 0.0.0.0 (prevents public exposure)
 
 ## License
 
