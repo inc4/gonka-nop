@@ -53,7 +53,7 @@ func FetchSyncStatus(ctx context.Context, rpcURL string) (*SyncStatus, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("RPC returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("rpc returned status %d", resp.StatusCode)
 	}
 
 	var tmStatus tendermintStatusResp
@@ -207,7 +207,7 @@ func WaitForModelLoad(ctx context.Context, adminURL string, interval time.Durati
 				return nil
 			}
 			if status.CurrentStatus == "FAILED" {
-				return fmt.Errorf("ML node failed: %s", status.FailureReason)
+				return fmt.Errorf("ml node failed: %s", status.FailureReason)
 			}
 		}
 

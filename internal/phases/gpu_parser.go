@@ -9,6 +9,12 @@ import (
 	"github.com/inc4/gonka-nop/internal/config"
 )
 
+const (
+	familyDebian  = "debian"
+	familyRHEL    = "rhel"
+	familyUnknown = "unknown"
+)
+
 // ParseDockerVersion parses "Docker version 27.4.1, build ..." into "27.4.1".
 func ParseDockerVersion(output string) (string, error) {
 	// Expected format: "Docker version 27.4.1, build abc1234"
@@ -114,13 +120,28 @@ func GPUArchFromName(gpuName string) string {
 			return entry.arch
 		}
 	}
-	return "unknown"
+	return familyUnknown
 }
 
 // ParseOSRelease parses /etc/os-release content into a Distro struct.
 // Expected format: KEY=VALUE or KEY="VALUE" lines.
 func ParseOSRelease(content string) (config.Distro, error) {
-	var d config.Distro
+	vals := parseOSReleaseKV(content)
+
+	d := config.Distro{
+		ID:      strings.ToLower(vals["ID"]),
+		Version: vals["VERSION_ID"],
+	}
+	if d.ID == "" {
+		return d, fmt.Errorf("could not determine distro ID from os-release")
+	}
+
+	d.Family = inferDistroFamily(d.ID, strings.ToLower(vals["ID_LIKE"]))
+	return d, nil
+}
+
+// parseOSReleaseKV extracts KEY=VALUE pairs from os-release content.
+func parseOSReleaseKV(content string) map[string]string {
 	vals := make(map[string]string)
 	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(line)
@@ -128,32 +149,25 @@ func ParseOSRelease(content string) (config.Distro, error) {
 			continue
 		}
 		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
+		if len(parts) == 2 {
+			vals[parts[0]] = strings.Trim(parts[1], `"`)
 		}
-		key := parts[0]
-		val := strings.Trim(parts[1], `"`)
-		vals[key] = val
 	}
-	d.ID = strings.ToLower(vals["ID"])
-	d.Version = vals["VERSION_ID"]
-	if d.ID == "" {
-		return d, fmt.Errorf("could not determine distro ID from os-release")
-	}
+	return vals
+}
 
-	// Infer family from ID_LIKE or known IDs
-	idLike := strings.ToLower(vals["ID_LIKE"])
+// inferDistroFamily determines the package manager family from distro ID and ID_LIKE.
+func inferDistroFamily(id, idLike string) string {
 	switch {
-	case d.ID == "ubuntu" || d.ID == "debian" || strings.Contains(idLike, "debian"):
-		d.Family = "debian"
-	case d.ID == "centos" || d.ID == "rhel" || d.ID == "fedora" || d.ID == "rocky" || d.ID == "almalinux" || strings.Contains(idLike, "rhel"):
-		d.Family = "rhel"
-	case d.ID == "amzn":
-		d.Family = "rhel"
+	case id == "ubuntu" || id == familyDebian || strings.Contains(idLike, familyDebian):
+		return familyDebian
+	case id == "centos" || id == familyRHEL || id == "fedora" || id == "rocky" || id == "almalinux" || strings.Contains(idLike, familyRHEL):
+		return familyRHEL
+	case id == "amzn":
+		return familyRHEL
 	default:
-		d.Family = "unknown"
+		return familyUnknown
 	}
-	return d, nil
 }
 
 // ParseModinfoVersion extracts version from `modinfo nvidia` output.

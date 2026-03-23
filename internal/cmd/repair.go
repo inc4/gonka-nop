@@ -611,7 +611,7 @@ func fetchReleaseByTag(ctx context.Context, tag string) ([]ReleaseAsset, error) 
 		return nil, fmt.Errorf("release %s not found", tag)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API returned %d for %s", resp.StatusCode, tag)
+		return nil, fmt.Errorf("github API returned %d for %s", resp.StatusCode, tag)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -668,7 +668,7 @@ func fetchReleaseBestMatch(ctx context.Context, upgradeName string) ([]ReleaseAs
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+		return nil, fmt.Errorf("github API returned %d", resp.StatusCode)
 	}
 
 	var releases []ghReleaseResp
@@ -815,7 +815,7 @@ func verifySHA256(filePath, expected string) error {
 
 	actual := hex.EncodeToString(h.Sum(nil))
 	if actual != expected {
-		return fmt.Errorf("SHA256 mismatch: expected %s, got %s", expected, actual)
+		return fmt.Errorf("sha256 mismatch: expected %s, got %s", expected, actual)
 	}
 	return nil
 }

@@ -318,6 +318,7 @@ type StatusConfig struct {
 	TendermintURL string // default "http://localhost:26657"
 	AdminURL      string // default "http://localhost:9200"
 	VLLMHealthURL string // default "http://localhost:8080"
+	NodeType      string // "full", "network", "mlnode" (empty = "full")
 }
 
 func defaultConfig() *StatusConfig {
@@ -339,7 +340,15 @@ func FetchStatusWithConfig(_ string, cfg *StatusConfig) (*NodeStatus, error) {
 	if cfg == nil {
 		cfg = defaultConfig()
 	}
+	nodeType := cfg.NodeType
 	status := &NodeStatus{}
+
+	// MLNode-only: no Admin API or chain services locally — skip all network queries
+	if nodeType == "mlnode" {
+		status.Overview.OverallStatus = "MLNODE-ONLY"
+		status.Overview.Issues = append(status.Overview.Issues, "ML node only — chain status available on network node server")
+		return status, nil
+	}
 
 	// Primary: fetch setup/report (provides most data)
 	fetchSetupReport(status, cfg)
@@ -353,8 +362,10 @@ func FetchStatusWithConfig(_ string, cfg *StatusConfig) (*NodeStatus, error) {
 	// Fetch validator set to check voting power
 	fetchValidatorSet(status, cfg)
 
-	// Fetch MLNode status from admin API
-	fetchMLNodeStatus(status, cfg)
+	// Fetch MLNode status from admin API (skip for network-only if no local MLNode)
+	if nodeType != "network" {
+		fetchMLNodeStatus(status, cfg)
+	}
 
 	// Compute overview from collected data
 	fetchOverviewStatus(status)

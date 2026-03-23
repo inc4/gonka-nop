@@ -63,33 +63,40 @@ func (p *Prerequisites) Run(ctx context.Context, state *config.State) error {
 		return err
 	}
 
-	// 5. Check NVIDIA driver → offer install if missing
-	if err := p.checkNVIDIADriver(ctx, state); err != nil {
-		return err
-	}
+	// 5-9: NVIDIA checks — skip for network-only topology (no GPU needed)
+	if !state.IsNetworkOnly() {
+		// 5. Check NVIDIA driver → offer install if missing
+		if err := p.checkNVIDIADriver(ctx, state); err != nil {
+			return err
+		}
 
-	// 6. Check driver consistency (userspace vs kernel module vs FM)
-	if !p.mocked {
-		p.checkDriverConsistency(ctx, state)
-	}
+		// 6. Check driver consistency (userspace vs kernel module vs FM)
+		if !p.mocked {
+			p.checkDriverConsistency(ctx, state)
+		}
 
-	// 7. Check Container Toolkit → offer install if missing
-	if err := p.checkContainerToolkit(ctx, state); err != nil {
-		return err
-	}
+		// 7. Check Container Toolkit → offer install if missing
+		if err := p.checkContainerToolkit(ctx, state); err != nil {
+			return err
+		}
 
-	// 8. Check CUDA in Docker
-	if err := p.checkCUDAInDocker(ctx, state); err != nil {
-		return err
-	}
+		// 8. Check CUDA in Docker
+		if err := p.checkCUDAInDocker(ctx, state); err != nil {
+			return err
+		}
 
-	// 9. Check Fabric Manager if multi-GPU
-	if !p.mocked {
-		p.checkFabricManager(ctx, state)
+		// 9. Check Fabric Manager if multi-GPU
+		if !p.mocked {
+			p.checkFabricManager(ctx, state)
+		}
+
+		// Check auto-updates (NVIDIA driver risk)
+		p.checkAutoUpdates(ctx, state)
+	} else {
+		ui.Info("Skipping NVIDIA checks (network-only topology — no GPU required)")
 	}
 
 	// 10-12. System checks
-	p.checkAutoUpdates(ctx, state)
 	p.checkStorageLayout(ctx, state)
 	p.checkPorts(state)
 
@@ -139,10 +146,10 @@ func (p *Prerequisites) checkDocker(ctx context.Context, state *config.State) er
 		ui.Warn("Docker is not installed")
 		install, _ := ui.Confirm("Install Docker Engine?", true)
 		if !install {
-			return fmt.Errorf("Docker is required but not installed")
+			return fmt.Errorf("docker is required but not installed")
 		}
 		if installErr := installDocker(ctx, state.Distro, state.UseSudo); installErr != nil {
-			return fmt.Errorf("Docker installation failed: %w", installErr)
+			return fmt.Errorf("docker installation failed: %w", installErr)
 		}
 		// Re-detect sudo after Docker install
 		if docker.DetectSudo(ctx) {
@@ -206,7 +213,7 @@ func (p *Prerequisites) checkNVIDIADriver(ctx context.Context, state *config.Sta
 		ui.Warn("NVIDIA driver not detected (nvidia-smi not found)")
 		install, _ := ui.Confirm("Install "+nvidiaDriver+"?", true)
 		if !install {
-			return fmt.Errorf("NVIDIA driver is required but not installed")
+			return fmt.Errorf("nvidia driver is required but not installed")
 		}
 		if installErr := installNVIDIADriver(ctx, state.Distro, state.UseSudo); installErr != nil {
 			return installErr
@@ -299,7 +306,7 @@ func (p *Prerequisites) checkContainerToolkit(ctx context.Context, state *config
 			return nil
 		}
 		if installErr := installContainerToolkit(ctx, state.Distro, state.UseSudo); installErr != nil {
-			return fmt.Errorf("Container Toolkit installation failed: %w", installErr)
+			return fmt.Errorf("container toolkit installation failed: %w", installErr)
 		}
 		return nil
 	}
@@ -325,7 +332,7 @@ func (p *Prerequisites) checkCUDAInDocker(ctx context.Context, state *config.Sta
 		}
 		out, cmdErr := cmd.CombinedOutput()
 		if cmdErr != nil {
-			return fmt.Errorf("CUDA not available in Docker container: %w\n%s", cmdErr, string(out))
+			return fmt.Errorf("cuda not available in Docker container: %w\n%s", cmdErr, string(out))
 		}
 		return nil
 	})

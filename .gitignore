@@ -23,3 +23,5 @@ CLAUDE.md
 # Test output
 *.test
 coverage.out
+ansible/inventory/hosts.yml
+bin/

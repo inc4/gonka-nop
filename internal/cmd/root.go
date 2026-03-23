@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/fatih/color"
+	"github.com/inc4/gonka-nop/internal/config"
 	"github.com/inc4/gonka-nop/internal/status"
 	"github.com/spf13/cobra"
 )
@@ -115,14 +116,26 @@ func init() {
 	statusCmd.Flags().BoolVar(&statusMocked, "mocked", false, "Show mocked demo status")
 }
 
-func runStatus(cmd *cobra.Command, _ []string) error {
+func runStatus(_ *cobra.Command, _ []string) error {
 	var nodeStatus *status.NodeStatus
 
 	if statusMocked {
 		nodeStatus = status.FetchMockedStatus()
 	} else {
+		// Load state to determine node topology (non-fatal if missing)
+		var cfg *status.StatusConfig
+		state, loadErr := config.Load(outputDir)
+		if loadErr == nil && state != nil {
+			cfg = &status.StatusConfig{
+				NodeType: state.EffectiveNodeType(),
+			}
+			if state.AdminURL != "" {
+				cfg.AdminURL = state.AdminURL
+			}
+		}
+
 		var err error
-		nodeStatus, err = status.FetchStatus(outputDir)
+		nodeStatus, err = status.FetchStatusWithConfig(outputDir, cfg)
 		if err != nil {
 			return fmt.Errorf("failed to fetch status: %w", err)
 		}

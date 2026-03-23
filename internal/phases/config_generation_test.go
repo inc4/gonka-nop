@@ -12,6 +12,7 @@ import (
 
 const (
 	testIP             = "10.0.0.1"
+	testAltIP          = "1.2.3.4"
 	testBeaconStateURL = "https://beaconstate.info/"
 )
 
@@ -425,7 +426,7 @@ func TestGenerateNodeConfig_HostIsInference(t *testing.T) {
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	state := config.NewState(tmpDir)
-	state.PublicIP = "http://1.2.3.4"
+	state.PublicIP = "http://" + testAltIP
 	state.SelectedModel = defaultModel
 
 	if err := generateNodeConfig(state); err != nil {
@@ -768,5 +769,198 @@ func TestBuildEnforcedModelArgs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBuildComposeFileList(t *testing.T) {
+	tests := []struct {
+		name  string
+		state *config.State
+		want  []string
+	}{
+		{
+			name: "full mode mainnet",
+			state: func() *config.State {
+				s := config.NewState("/tmp/test")
+				s.NodeType = config.NodeTypeFull
+				return s
+			}(),
+			want: []string{"docker-compose.yml", "docker-compose.mlnode.yml"},
+		},
+		{
+			name: "full mode empty type (backwards compat)",
+			state: func() *config.State {
+				s := config.NewState("/tmp/test")
+				return s
+			}(),
+			want: []string{"docker-compose.yml", "docker-compose.mlnode.yml"},
+		},
+		{
+			name: "full mode testnet",
+			state: func() *config.State {
+				s := config.NewState("/tmp/test")
+				s.IsTestNet = true
+				return s
+			}(),
+			want: []string{"docker-compose.yml", "docker-compose.env-override.yml", "docker-compose.mlnode.yml"},
+		},
+		{
+			name: "network-only mainnet",
+			state: func() *config.State {
+				s := config.NewState("/tmp/test")
+				s.NodeType = config.NodeTypeNetwork
+				return s
+			}(),
+			want: []string{"docker-compose.yml"},
+		},
+		{
+			name: "network-only testnet",
+			state: func() *config.State {
+				s := config.NewState("/tmp/test")
+				s.NodeType = config.NodeTypeNetwork
+				s.IsTestNet = true
+				return s
+			}(),
+			want: []string{"docker-compose.yml", "docker-compose.env-override.yml"},
+		},
+		{
+			name: "mlnode-only",
+			state: func() *config.State {
+				s := config.NewState("/tmp/test")
+				s.NodeType = config.NodeTypeMLNode
+				return s
+			}(),
+			want: []string{"docker-compose.mlnode.yml"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildComposeFileList(tt.state)
+			if len(got) != len(tt.want) {
+				t.Fatalf("buildComposeFileList() = %v, want %v", got, tt.want)
+			}
+			for i, f := range got {
+				if f != tt.want[i] {
+					t.Errorf("buildComposeFileList()[%d] = %q, want %q", i, f, tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestPocCallbackURL(t *testing.T) {
+	tests := []struct {
+		name  string
+		state *config.State
+		want  string
+	}{
+		{
+			name: "full mode uses Docker DNS",
+			state: func() *config.State {
+				s := config.NewState("/tmp/test")
+				s.PublicIP = testAltIP
+				return s
+			}(),
+			want: "http://api:9100",
+		},
+		{
+			name: "network-only uses private IP",
+			state: func() *config.State {
+				s := config.NewState("/tmp/test")
+				s.NodeType = config.NodeTypeNetwork
+				s.PublicIP = testAltIP
+				s.NetworkNodeIP = "10.0.1.100"
+				return s
+			}(),
+			want: "http://10.0.1.100:9100",
+		},
+		{
+			name: "network-only falls back to public IP",
+			state: func() *config.State {
+				s := config.NewState("/tmp/test")
+				s.NodeType = config.NodeTypeNetwork
+				s.PublicIP = testAltIP
+				return s
+			}(),
+			want: "http://" + testAltIP + ":9100",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := pocCallbackURL(tt.state)
+			if got != tt.want {
+				t.Errorf("pocCallbackURL() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestApiPort9100Binding(t *testing.T) {
+	tests := []struct {
+		name  string
+		state *config.State
+		want  string
+	}{
+		{
+			name: "full mode binds to localhost",
+			state: func() *config.State {
+				s := config.NewState("/tmp/test")
+				return s
+			}(),
+			want: "127.0.0.1:9100",
+		},
+		{
+			name: "network-only exposes on all interfaces",
+			state: func() *config.State {
+				s := config.NewState("/tmp/test")
+				s.NodeType = config.NodeTypeNetwork
+				return s
+			}(),
+			want: "9100",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := apiPort9100Binding(tt.state)
+			if got != tt.want {
+				t.Errorf("apiPort9100Binding() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGenerateDockerComposeNetworkOnly(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "gonka-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	state := config.NewState(tmpDir)
+	state.NodeType = config.NodeTypeNetwork
+	state.PublicIP = testAltIP
+	state.NetworkNodeIP = "10.0.1.50"
+	state.PersistentPeers = []string{"peer1@" + testAltIP + ":5000"}
+
+	if err := generateDockerCompose(state); err != nil {
+		t.Fatalf("generateDockerCompose() error: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(tmpDir, "docker-compose.yml"))
+	if err != nil {
+		t.Fatalf("read compose: %v", err)
+	}
+
+	// Port 9100 should NOT be bound to 127.0.0.1 for network-only
+	if strings.Contains(string(content), "127.0.0.1:9100") {
+		t.Error("network-only compose should not bind port 9100 to 127.0.0.1")
+	}
+	// Port 9100 should be exposed
+	if !strings.Contains(string(content), "9100:9100") {
+		t.Error("network-only compose should expose port 9100")
+	}
+	// Port 9200 should still be localhost
+	if !strings.Contains(string(content), "127.0.0.1:9200") {
+		t.Error("port 9200 should always be bound to 127.0.0.1")
 	}
 }
