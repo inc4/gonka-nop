@@ -3,7 +3,10 @@ package phases
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/inc4/gonka-nop/internal/config"
@@ -100,6 +103,14 @@ func (p *Deploy) deployByTopology(ctx context.Context, state *config.State) erro
 			return err
 		}
 		if err := p.startMLNode(ctx, state); err != nil {
+			return err
+		}
+	}
+
+	// ML node port restriction: allow only network node IP on ports 8080/5050.
+	// Only applied for standalone mlnode topology on a public (non-RFC1918) IP.
+	if state.IsMLNodeOnly() && isPublicIP(state.PublicIP) {
+		if err := p.configureMLNodeFirewall(ctx, state); err != nil {
 			return err
 		}
 	}
@@ -442,6 +453,132 @@ func (p *Deploy) showSummary(state *config.State, nodeType string) {
 		ui.Warn("Firewall: Not configured. Please set up DOCKER-USER iptables rules manually")
 	}
 	ui.Detail("DDoS: Proxy route blocking enabled by default")
+}
+
+// configureMLNodeFirewall restricts ports 8080 (PoC) and 5050 (inference) to
+// accept connections only from the network node IP, preventing DDoS from the
+// public internet. Non-fatal: warns and prints manual steps on failure.
+func (p *Deploy) configureMLNodeFirewall(_ context.Context, state *config.State) error {
+	ui.Header("ML Node Firewall")
+
+	networkNodeIP := state.NetworkNodeIP
+	if networkNodeIP == "" {
+		ui.Warn("Network node IP unknown — skipping port restriction")
+		return nil
+	}
+
+	pocPort := state.PoCPort
+	if pocPort == 0 {
+		pocPort = 8080
+	}
+	inferencePort := state.InferencePort
+	if inferencePort == 0 {
+		inferencePort = 5050
+	}
+
+	ui.Info("Restricting ports %d (PoC) and %d (inference) to %s only",
+		pocPort, inferencePort, networkNodeIP)
+
+	var failed []int
+	for _, port := range []int{pocPort, inferencePort} {
+		portStr := fmt.Sprintf("%d", port)
+		allowErr := runIPTables(state.UseSudo, "-I", "INPUT", "-p", "tcp",
+			"--dport", portStr, "-s", networkNodeIP, "-j", "ACCEPT")
+		if allowErr != nil {
+			ui.Warn("iptables ACCEPT port %d: %v", port, allowErr)
+			failed = append(failed, port)
+			continue
+		}
+		dropErr := runIPTables(state.UseSudo, "-A", "INPUT", "-p", "tcp",
+			"--dport", portStr, "-j", "DROP")
+		if dropErr != nil {
+			ui.Warn("iptables DROP port %d: %v", port, dropErr)
+			failed = append(failed, port)
+			continue
+		}
+		ui.Success("Port %d: allow %s, drop all others", port, networkNodeIP)
+	}
+
+	if len(failed) > 0 {
+		ui.Warn("Firewall not fully configured — apply manually on this server:")
+		for _, port := range []int{pocPort, inferencePort} {
+			ui.Detail("  sudo iptables -I INPUT -p tcp --dport %d -s %s -j ACCEPT",
+				port, networkNodeIP)
+			ui.Detail("  sudo iptables -A INPUT -p tcp --dport %d -j DROP", port)
+		}
+		return nil
+	}
+
+	if err := saveIPTables(state.UseSudo); err != nil {
+		ui.Warn("Rules active but not persisted across reboots: %v", err)
+		ui.Detail("To persist: sudo iptables-save > /etc/iptables/rules.v4")
+	} else {
+		ui.Success("Firewall rules saved (persistent across reboots)")
+	}
+
+	state.FirewallConfigured = true
+	return nil
+}
+
+// runIPTables runs an iptables command with optional sudo.
+func runIPTables(useSudo bool, args ...string) error {
+	var cmd *exec.Cmd
+	if useSudo {
+		cmd = exec.Command(cmdSudo, append([]string{"iptables"}, args...)...)
+	} else {
+		cmd = exec.Command("iptables", args...)
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// saveIPTables persists iptables rules across reboots.
+// Tries netfilter-persistent first, then falls back to iptables-save.
+func saveIPTables(useSudo bool) error {
+	attempts := [][]string{
+		{"netfilter-persistent", "save"},
+		{"sh", "-c", "iptables-save > /etc/iptables/rules.v4"},
+	}
+	for _, args := range attempts {
+		var cmd *exec.Cmd
+		if useSudo {
+			cmd = exec.Command(cmdSudo, args...)
+		} else {
+			cmd = exec.Command(args[0], args[1:]...)
+		}
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("neither netfilter-persistent nor iptables-save succeeded")
+}
+
+// isPublicIP returns true if ip is a routable public address (not RFC1918/loopback).
+func isPublicIP(ip string) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	privateRanges := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"127.0.0.0/8",
+		"169.254.0.0/16",
+	}
+	for _, cidr := range privateRanges {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		if network.Contains(parsed) {
+			return false
+		}
+	}
+	return true
 }
 
 // checkUpgradeHandlerError checks node container logs for upgrade handler errors.
