@@ -166,9 +166,8 @@ func persistIPTables(useSudo bool) error {
 
 	// Install if-pre-up.d hook so rules reload on every network restart
 	hookPath := "/etc/network/if-pre-up.d/iptables"
-	hookContent := "#!/bin/sh\niptables-restore < /etc/iptables/rules.v4\n"
-	writeCmd := fmt.Sprintf("printf '%%s' %q > %s && chmod +x %s",
-		hookContent, hookPath, hookPath)
+	writeCmd := fmt.Sprintf("printf '#!/bin/sh\\niptables-restore < /etc/iptables/rules.v4\\n' > %s && chmod +x %s",
+		hookPath, hookPath)
 	if useSudo {
 		cmd = exec.Command(cmdSudo, "sh", "-c", writeCmd)
 	} else {
