@@ -3,7 +3,10 @@ package phases
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/inc4/gonka-nop/internal/config"
@@ -100,6 +103,15 @@ func (p *Deploy) deployByTopology(ctx context.Context, state *config.State) erro
 			return err
 		}
 		if err := p.startMLNode(ctx, state); err != nil {
+			return err
+		}
+	}
+
+	// ML node port firewall: restrict ports 8080 (PoC) and 5000 (inference) to
+	// accept connections only from the network node. Applied only for mlnode-only
+	// topology on a public (non-RFC1918) IP — private networks don't need it.
+	if state.IsMLNodeOnly() && isPublicIP(state.PublicIP) {
+		if err := p.configureMLNodeFirewall(ctx, state); err != nil {
 			return err
 		}
 	}
@@ -442,6 +454,154 @@ func (p *Deploy) showSummary(state *config.State, nodeType string) {
 		ui.Warn("Firewall: Not configured. Please set up DOCKER-USER iptables rules manually")
 	}
 	ui.Detail("DDoS: Proxy route blocking enabled by default")
+}
+
+// inferenceContainerPort is the port uvicorn listens on inside the mlnode-308
+// container. The host maps state.InferencePort (default 5050) → 5000 via Docker,
+// so in the DOCKER-USER chain (post-DNAT) we must use the container port.
+const inferenceContainerPort = 5000
+
+// configureMLNodeFirewall restricts mlnode ports to accept only from the network
+// node, preventing public internet access. Uses the DOCKER-USER iptables chain
+// (not INPUT) because Docker rewrites destination IPs via DNAT before the FORWARD
+// chain, bypassing INPUT entirely.
+//
+// Two cases are handled:
+//   - Same server (public_ip == network_node_ip): traffic from the network node
+//     arrives via the Docker bridge (172.16.0.0/12), so we allow that subnet.
+//   - Separate server: traffic arrives from the real network node IP, so we
+//     allow only that specific IP.
+//
+// Non-fatal: prints manual commands and continues on failure.
+func (p *Deploy) configureMLNodeFirewall(_ context.Context, state *config.State) error {
+	ui.Header("ML Node Firewall")
+
+	networkNodeIP := state.NetworkNodeIP
+	if networkNodeIP == "" {
+		ui.Warn("Network node IP unknown — skipping port restriction")
+		ui.Detail("Set firewall manually to restrict ports %d and %d", state.PoCPort, state.InferencePort)
+		return nil
+	}
+
+	pocPort := state.PoCPort
+	if pocPort == 0 {
+		pocPort = 8080
+	}
+
+	// Determine allowed source and topology label.
+	var allowedSrc, topoLabel string
+	if state.PublicIP == networkNodeIP {
+		// Same-server: network node containers use the Docker bridge network.
+		allowedSrc = "172.16.0.0/12"
+		topoLabel = "same-server (Docker bridge)"
+	} else {
+		// Separate-server: allow the real network node IP.
+		allowedSrc = networkNodeIP
+		topoLabel = "separate-server (" + networkNodeIP + ")"
+	}
+
+	ui.Info("Restricting ports %d (PoC) and %d (inference) — %s",
+		pocPort, inferenceContainerPort, topoLabel)
+
+	// Container ports used in DOCKER-USER (post-DNAT):
+	//   PoCPort host == PoCPort container (both 8080)
+	//   InferencePort host (5050) → container port 5000
+	ports := []int{pocPort, inferenceContainerPort}
+
+	var failed []int
+	for _, port := range ports {
+		portStr := fmt.Sprintf("%d", port)
+		// Insert at top: DROP packets NOT from allowedSrc.
+		if err := runIPTables(state.UseSudo, "-I", "DOCKER-USER",
+			"-p", "tcp", "--dport", portStr,
+			"!", "-s", allowedSrc, "-j", "DROP"); err != nil {
+			ui.Warn("iptables DROP port %d: %v", port, err)
+			failed = append(failed, port)
+		} else {
+			ui.Success("Port %d: blocked for all except %s", port, allowedSrc)
+		}
+	}
+
+	if len(failed) > 0 {
+		ui.Warn("Firewall not fully configured — apply manually on this server:")
+		for _, port := range ports {
+			ui.Detail("  sudo iptables -I DOCKER-USER -p tcp --dport %d ! -s %s -j DROP",
+				port, allowedSrc)
+		}
+		ui.Detail("  sudo iptables-save > /etc/iptables/rules.v4")
+		return nil
+	}
+
+	if err := saveIPTables(state.UseSudo); err != nil {
+		ui.Warn("Rules active but not persisted across reboots: %v", err)
+		ui.Detail("To persist: sudo iptables-save > /etc/iptables/rules.v4")
+	} else {
+		ui.Success("Firewall rules saved (persistent across reboots)")
+	}
+
+	state.FirewallConfigured = true
+	return nil
+}
+
+// runIPTables runs an iptables command, optionally prefixed with sudo.
+func runIPTables(useSudo bool, args ...string) error {
+	var cmd *exec.Cmd
+	if useSudo {
+		cmd = exec.Command(cmdSudo, append([]string{"iptables"}, args...)...)
+	} else {
+		cmd = exec.Command("iptables", args...)
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// saveIPTables persists iptables rules across reboots.
+// Tries netfilter-persistent first, then falls back to iptables-save.
+func saveIPTables(useSudo bool) error {
+	attempts := [][]string{
+		{"netfilter-persistent", "save"},
+		{"sh", "-c", "iptables-save > /etc/iptables/rules.v4"},
+	}
+	for _, args := range attempts {
+		var cmd *exec.Cmd
+		if useSudo {
+			cmd = exec.Command(cmdSudo, args...)
+		} else {
+			cmd = exec.Command(args[0], args[1:]...)
+		}
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("neither netfilter-persistent nor iptables-save succeeded")
+}
+
+// isPublicIP returns true if ip is a routable public address (not RFC1918/loopback/link-local).
+func isPublicIP(ip string) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	private := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"127.0.0.0/8",
+		"169.254.0.0/16",
+	}
+	for _, cidr := range private {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		if network.Contains(parsed) {
+			return false
+		}
+	}
+	return true
 }
 
 // checkUpgradeHandlerError checks node container logs for upgrade handler errors.
