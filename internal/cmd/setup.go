@@ -285,6 +285,7 @@ func buildPhaseList(state *config.State) []phases.Phase {
 			phases.NewNetworkSelect(),
 			phases.NewMLNodeConfig(),
 			phases.NewDeploy(),
+			phases.NewMLNodeFirewall(),
 		}
 	default:
 		// Full: all phases (current behavior)
