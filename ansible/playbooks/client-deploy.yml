@@ -22,11 +22,11 @@
     central_grafana_url: "http://202.78.161.151:3000"
     remote_write_url: "{{ central_prometheus_url }}/api/v1/write"
 
-    # Client defaults (do not export network-wide metrics — central does that)
-    export_network_metrics: "false"
-    enable_node_fetch: "true"
-    exporter_port: 9401
+    # Client defaults
+    exporter_port: 9404
+    node_exporter_port: 9101
     exporter_refresh_interval: 30
+    max_epoch_history: 500
     prometheus_image: "prom/prometheus:v3.2.1"
     prometheus_port: 9090
     prometheus_scrape_interval: "30s"
@@ -93,17 +93,18 @@
     - name: Show deployment result
       ansible.builtin.debug:
         msg: |
-          ✅ Gonka monitoring client deployed!
+          Gonka monitoring client deployed!
 
           Local exporter:  http://{{ ansible_host }}:{{ exporter_port }}/metrics
+          Node exporter:   http://{{ ansible_host }}:{{ node_exporter_port }}/metrics
           Pushing to:      {{ remote_write_url }}
           Node alias:      {{ node_alias }}
           Metrics count:   {{ metrics_output.content | regex_findall('gonka_\\w+') | unique | length }} gonka_* metrics
 
           {% if prom_check is succeeded and prom_check.json.data.result | length > 0 %}
-          ✅ Central server is receiving your metrics!
+          Central server is receiving your metrics!
           {% else %}
-          ⚠️  Central server hasn't received metrics yet. This may take up to 60s.
+          Central server hasn't received metrics yet. This may take up to 60s.
               Check manually: curl '{{ central_prometheus_url }}/api/v1/query?query=gonka_block_height{instance="{{ node_alias }}"}'
           {% endif %}
 

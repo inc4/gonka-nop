@@ -5,32 +5,17 @@
     state: directory
     mode: "0755"
 
-- name: Create exporter build directory
-  ansible.builtin.file:
-    path: "{{ monitoring_dir }}/exporter-build"
-    state: directory
-    mode: "0755"
+- name: Detect Gonka node Docker network
+  ansible.builtin.shell: >
+    docker network ls --filter name=gonka --format '{{ '{{' }}.Name{{ '}}' }}' | head -1
+  register: detected_network
+  changed_when: false
+  failed_when: false
 
-- name: Copy exporter source
-  ansible.builtin.copy:
-    src: exporter.py
-    dest: "{{ monitoring_dir }}/exporter-build/exporter.py"
-    mode: "0644"
-
-- name: Copy exporter Dockerfile
-  ansible.builtin.copy:
-    src: Dockerfile
-    dest: "{{ monitoring_dir }}/exporter-build/Dockerfile"
-    mode: "0644"
-
-- name: Build gonka-exporter image
-  community.docker.docker_image:
-    name: gonka-exporter
-    tag: local
-    source: build
-    build:
-      path: "{{ monitoring_dir }}/exporter-build"
-    force_source: true
+- name: Set gonka_network from detected network
+  ansible.builtin.set_fact:
+    gonka_network: "{{ detected_network.stdout }}"
+  when: detected_network.stdout | length > 0
 
 - name: Deploy gonka-exporter docker-compose
   ansible.builtin.template:
@@ -38,16 +23,24 @@
     dest: "{{ monitoring_dir }}/docker-compose.exporter.yml"
     mode: "0644"
 
+- name: Pull exporter image
+  community.docker.docker_image:
+    name: "{{ exporter_image }}"
+    tag: "{{ exporter_version }}"
+    source: pull
+    force_source: true
+
 - name: Start gonka-exporter
   community.docker.docker_compose_v2:
     project_src: "{{ monitoring_dir }}"
     files:
       - docker-compose.exporter.yml
     state: present
+    pull: missing
 
 - name: Wait for exporter to be ready
   ansible.builtin.uri:
-    url: "http://localhost:{{ exporter_port }}/metrics"
+    url: "http://localhost:{{ exporter_port }}/healthz"
     method: GET
     status_code: 200
   register: exporter_health

@@ -1,12 +1,28 @@
 # Shared variables
 monitoring_dir: "{{ deploy_dir | default('/data/gonka-node') }}/monitoring"
 
-# Exporter settings
-exporter_image: "ghcr.io/votkon/gonka-exporter-prometheus:latest"
-exporter_port: 9401
+# Exporter settings (ghcr.io/inc4/gonka-exporter-go)
+exporter_image: "ghcr.io/inc4/gonka-exporter-go"
+exporter_version: "latest"
+exporter_port: 9404
 exporter_refresh_interval: 30
-export_network_metrics: "true"
-enable_node_fetch: "true"
+max_epoch_history: 500
+
+# Internal API URLs (container names on the Docker bridge network)
+node_rpc_url: "http://node:26657"
+node_rest_url: "http://node:1317"
+api_url: "http://api:9000"
+admin_api_url: "http://api:9200"
+
+# Comma-separated public nodes for block height comparison (empty = built-in defaults)
+block_height_nodes: ""
+
+# Docker network of the Gonka node stack
+gonka_network: "gonka-node_default"
+
+# Node-exporter (system metrics)
+node_exporter_image: "prom/node-exporter:latest"
+node_exporter_port: 9101
 
 # Prometheus settings
 prometheus_image: "prom/prometheus:v3.2.1"

@@ -26,4 +26,5 @@
       ansible.builtin.debug:
         msg: |
           Exporter running at http://{{ ansible_host }}:{{ exporter_port }}/metrics
+          Node exporter at http://{{ ansible_host }}:{{ node_exporter_port }}/metrics
           Metrics available: {{ metrics_check.content | regex_findall('gonka_\\w+') | unique | length }} gonka_* metrics

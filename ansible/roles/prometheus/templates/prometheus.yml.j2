@@ -23,6 +23,12 @@ scrape_configs:
         labels:
           instance: "{{ node_alias | default('gonka-node') }}"
 
+  - job_name: node-exporter
+    static_configs:
+      - targets: ["localhost:{{ node_exporter_port }}"]
+        labels:
+          instance: "{{ node_alias | default('gonka-node') }}"
+
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:{{ prometheus_port }}"]

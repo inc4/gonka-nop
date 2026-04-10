@@ -37,6 +37,7 @@
           Prometheus:   http://{{ ansible_host }}:{{ prometheus_port }}
           Alertmanager: http://{{ ansible_host }}:{{ alertmanager_port }}
           Exporter:     http://{{ ansible_host }}:{{ exporter_port }}/metrics
+          Node Exporter: http://{{ ansible_host }}:{{ node_exporter_port }}/metrics
 
           Dashboards:
             - Gonka Fleet Overview

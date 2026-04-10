@@ -46,7 +46,8 @@
         msg: |
           Node {{ node_alias }} monitoring deployed!
 
-          Exporter:  http://{{ ansible_host }}:{{ exporter_port }}/metrics
+          Exporter:      http://{{ ansible_host }}:{{ exporter_port }}/metrics
+          Node Exporter: http://{{ ansible_host }}:{{ node_exporter_port }}/metrics
           Pushing to: {{ remote_write_url }}
           Metrics:   {{ metrics_check.content | regex_findall('gonka_\\w+') | unique | length }} gonka_* metrics
 
