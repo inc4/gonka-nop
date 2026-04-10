@@ -8,8 +8,8 @@
 
   pre_tasks:
     - name: Verify Docker is available
-      ansible.builtin.command: docker info
-      changed_when: false
+      community.docker.docker_host_info:
+      register: docker_info
 
     - name: Verify deploy directory exists
       ansible.builtin.stat:

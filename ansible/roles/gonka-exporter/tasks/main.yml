@@ -5,17 +5,26 @@
     state: directory
     mode: "0755"
 
-- name: Detect Gonka node Docker network
-  ansible.builtin.shell: >
-    docker network ls --filter name=gonka --format '{{ '{{' }}.Name{{ '}}' }}' | head -1
-  register: detected_network
-  changed_when: false
+- name: Check if configured Docker network exists
+  community.docker.docker_network_info:
+    name: "{{ gonka_network }}"
+  register: configured_network
   failed_when: false
+
+- name: Search for Gonka Docker network
+  community.docker.docker_host_info:
+    networks: true
+    networks_filters:
+      name: "gonka"
+  register: docker_networks
+  when: not (configured_network.exists | default(false))
 
 - name: Set gonka_network from detected network
   ansible.builtin.set_fact:
-    gonka_network: "{{ detected_network.stdout }}"
-  when: detected_network.stdout | length > 0
+    gonka_network: "{{ docker_networks.networks[0].Name }}"
+  when:
+    - not (configured_network.exists | default(false))
+    - docker_networks.networks | default([]) | length > 0
 
 - name: Deploy gonka-exporter docker-compose
   ansible.builtin.template:

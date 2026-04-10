@@ -46,8 +46,8 @@
             deploy_dir: /path/to/gonka-node
 
     - name: Verify Docker is available
-      ansible.builtin.command: docker info
-      changed_when: false
+      community.docker.docker_host_info:
+      register: docker_info
 
     - name: Verify deploy directory exists
       ansible.builtin.stat:
@@ -56,10 +56,10 @@
       failed_when: not deploy_check.stat.exists
 
     - name: Verify Gonka node is running
-      ansible.builtin.command: docker ps --filter name=node --format "{{ '{{' }}.Names{{ '}}' }}"
+      community.docker.docker_container_info:
+        name: node
       register: node_check
-      changed_when: false
-      failed_when: "'node' not in node_check.stdout"
+      failed_when: not (node_check.exists | default(false)) or not (node_check.container.State.Running | default(false))
 
   roles:
     - gonka-exporter
