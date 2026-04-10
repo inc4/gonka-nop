@@ -22,12 +22,18 @@ scrape_configs:
       - targets: ["localhost:{{ exporter_port }}"]
         labels:
           instance: "{{ node_alias | default('gonka-node') }}"
+{% if participant_address | default('') | length > 0 %}
+          participant: "{{ participant_address }}"
+{% endif %}
 
   - job_name: node-exporter
     static_configs:
       - targets: ["localhost:{{ node_exporter_port }}"]
         labels:
           instance: "{{ node_alias | default('gonka-node') }}"
+{% if participant_address | default('') | length > 0 %}
+          participant: "{{ participant_address }}"
+{% endif %}
 
   - job_name: prometheus
     static_configs:
