@@ -1,0 +1,11 @@
+alertmanager_image: "prom/alertmanager:v0.28.1"
+alertmanager_port: 9093
+
+# Notification channels (all optional)
+telegram_bot_token: ""
+telegram_chat_id: ""
+discord_webhook_url: ""
+slack_webhook_url: ""
+email_to: ""
+email_from: "alertmanager@gonka.local"
+smtp_smarthost: "localhost:25"

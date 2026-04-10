@@ -1,0 +1,73 @@
+global:
+  resolve_timeout: 5m
+{% if smtp_smarthost | default('') | length > 0 and email_to | default('') | length > 0 %}
+  smtp_smarthost: "{{ smtp_smarthost }}"
+  smtp_from: "{{ email_from }}"
+{% endif %}
+
+route:
+  group_by: ["alertname", "instance"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: default
+
+  routes:
+    - match:
+        severity: critical
+      receiver: critical
+      repeat_interval: 1h
+
+receivers:
+  - name: default
+{% if telegram_bot_token | default('') | length > 0 %}
+    telegram_configs:
+      - bot_token: "{{ telegram_bot_token }}"
+        chat_id: {{ telegram_chat_id }}
+        parse_mode: HTML
+        message: |
+          {{ '{{' }} if eq .Status "firing" {{ '}}' }}🔴{{ '{{' }} else {{ '}}' }}🟢{{ '{{' }} end {{ '}}' }} <b>{{ '{{ .CommonLabels.alertname }}' }}</b>
+          <b>Instance:</b> {{ '{{ .CommonLabels.instance }}' }}
+          <b>Severity:</b> {{ '{{ .CommonLabels.severity }}' }}
+          {{ '{{ range .Alerts }}' }}
+          {{ '{{ .Annotations.summary }}' }}
+          {{ '{{ end }}' }}
+{% endif %}
+{% if discord_webhook_url | default('') | length > 0 %}
+    discord_configs:
+      - webhook_url: "{{ discord_webhook_url }}"
+{% endif %}
+{% if slack_webhook_url | default('') | length > 0 %}
+    slack_configs:
+      - api_url: "{{ slack_webhook_url }}"
+        channel: "#gonka-alerts"
+{% endif %}
+{% if telegram_bot_token | default('') | length == 0 and discord_webhook_url | default('') | length == 0 and slack_webhook_url | default('') | length == 0 %}
+    # No notification channels configured — alerts visible in Alertmanager UI only
+    # Configure telegram_bot_token/telegram_chat_id or discord_webhook_url in group_vars
+    webhook_configs: []
+{% endif %}
+
+  - name: critical
+{% if telegram_bot_token | default('') | length > 0 %}
+    telegram_configs:
+      - bot_token: "{{ telegram_bot_token }}"
+        chat_id: {{ telegram_chat_id }}
+        parse_mode: HTML
+        message: |
+          🚨 <b>CRITICAL: {{ '{{ .CommonLabels.alertname }}' }}</b>
+          <b>Instance:</b> {{ '{{ .CommonLabels.instance }}' }}
+          {{ '{{ range .Alerts }}' }}
+          {{ '{{ .Annotations.description }}' }}
+          {{ '{{ end }}' }}
+{% endif %}
+{% if telegram_bot_token | default('') | length == 0 %}
+    webhook_configs: []
+{% endif %}
+
+inhibit_rules:
+  - source_match:
+      severity: critical
+    target_match:
+      severity: warning
+    equal: ["alertname", "instance"]

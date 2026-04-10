@@ -1,0 +1,15 @@
+services:
+  alertmanager:
+    image: {{ alertmanager_image }}
+    container_name: gonka-alertmanager
+    network_mode: host
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --web.listen-address=0.0.0.0:{{ alertmanager_port }}
+      - --storage.path=/alertmanager
+    volumes:
+      - {{ monitoring_dir }}/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - {{ monitoring_dir }}/alertmanager/data:/alertmanager
+    labels:
+      com.gonka.monitoring: "alertmanager"

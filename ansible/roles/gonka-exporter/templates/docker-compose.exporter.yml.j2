@@ -1,0 +1,61 @@
+services:
+  node-exporter:
+    image: {{ node_exporter_image }}
+    container_name: node-exporter
+    restart: unless-stopped
+    pid: host
+    network_mode: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--web.listen-address=:{{ node_exporter_port }}'
+      - '--collector.disable-defaults'
+      - '--collector.cpu'
+      - '--collector.meminfo'
+      - '--collector.diskstats'
+      - '--collector.filesystem'
+      - '--collector.loadavg'
+      - '--collector.netdev'
+    labels:
+      com.gonka.monitoring: "node-exporter"
+
+  gonka-exporter:
+    image: {{ exporter_image }}:{{ exporter_version }}
+    container_name: gonka-exporter
+    restart: unless-stopped
+    networks:
+      - gonka-network
+    ports:
+      - "{{ exporter_port }}:{{ exporter_port }}"
+    volumes:
+      - epoch-data:/data
+    environment:
+      - EXPORTER_PORT={{ exporter_port }}
+      - PARTICIPANT_ADDRESS={{ participant_address | default('') }}
+      - REFRESH_INTERVAL={{ exporter_refresh_interval }}
+      - NODE_RPC_URL={{ node_rpc_url }}
+      - NODE_REST_URL={{ node_rest_url }}
+      - API_URL={{ api_url }}
+      - ADMIN_API_URL={{ admin_api_url }}
+      - EPOCH_HISTORY_FILE=/data/epoch_history.json
+      - STATE_FILE=/data/exporter_state.json
+      - MAX_EPOCH_HISTORY={{ max_epoch_history }}
+{% if block_height_nodes | default('') | length > 0 %}
+      - BLOCK_HEIGHT_NODES={{ block_height_nodes }}
+{% endif %}
+    labels:
+      com.gonka.monitoring: "exporter"
+
+volumes:
+  epoch-data:
+    driver: local
+
+networks:
+  gonka-network:
+    external: true
+    name: {{ gonka_network }}

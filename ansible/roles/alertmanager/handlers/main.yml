@@ -1,0 +1,9 @@
+---
+- name: restart alertmanager
+  community.docker.docker_compose_v2:
+    project_src: "{{ monitoring_dir }}"
+    files:
+      - docker-compose.alertmanager.yml
+    state: restarted
+    services:
+      - alertmanager
