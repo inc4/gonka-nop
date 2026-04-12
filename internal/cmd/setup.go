@@ -15,20 +15,22 @@ var (
 	mockedSetup   bool
 
 	// Non-interactive flags
-	yesFlag            bool
-	flagNetwork        string
-	flagKeyWorkflow    string
-	flagKeyName        string
-	flagKeyringPass    string
-	flagPublicIP       string
-	flagHFHome         string
-	flagPorts          string
-	flagExtP2PPort     string
-	flagExtAPIPort     string
-	flagIntP2PPort     string
-	flagIntAPIPort     string
-	flagNodeType       string
-	flagNetworkNodeURL string
+	yesFlag              bool
+	flagNetwork          string
+	flagKeyWorkflow      string
+	flagKeyName          string
+	flagKeyringPass      string
+	flagPublicIP         string
+	flagHFHome           string
+	flagPorts            string
+	flagExtP2PPort       string
+	flagExtAPIPort       string
+	flagIntP2PPort       string
+	flagIntAPIPort       string
+	flagNodeType         string
+	flagNetworkNodeURL   string
+	flagMLNodeImage      string
+	flagAttentionBackend string
 )
 
 var setupCmd = &cobra.Command{
@@ -82,6 +84,8 @@ func init() {
 	setupCmd.Flags().StringVar(&flagIntAPIPort, "int-api-port", "", "Internal API port (Docker binding)")
 	setupCmd.Flags().StringVar(&flagNodeType, "type", "", "Node topology: full (default), network, or mlnode")
 	setupCmd.Flags().StringVar(&flagNetworkNodeURL, "network-node-url", "", "Network node Admin API URL (for mlnode-only)")
+	setupCmd.Flags().StringVar(&flagMLNodeImage, "mlnode-image", "", "Custom MLNode Docker image (e.g., ghcr.io/segovchik/gonka-b300-image:3.0.13-b300-tp1)")
+	setupCmd.Flags().StringVar(&flagAttentionBackend, "attention-backend", "", "vLLM attention backend (FLASHINFER or FLASH_ATTN)")
 }
 
 // setupOverrides maps CLI flag values to ui prompt overrides.
@@ -144,6 +148,16 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 	// Set account pubkey if provided
 	if accountPubKey != "" {
 		state.AccountPubKey = accountPubKey
+	}
+
+	// Set custom MLNode image if provided (overrides auto-detection)
+	if flagMLNodeImage != "" {
+		state.CustomMLNodeImage = flagMLNodeImage
+	}
+
+	// Set attention backend if provided (overrides auto-detection)
+	if flagAttentionBackend != "" {
+		state.AttentionBackend = flagAttentionBackend
 	}
 
 	ui.Header("Gonka Node Setup")

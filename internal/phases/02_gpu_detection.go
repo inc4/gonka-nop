@@ -2,7 +2,9 @@ package phases
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -11,8 +13,9 @@ import (
 )
 
 const (
-	kvCacheDtypeFP8    = "fp8"
-	mlnodeBlackwellTag = "3.0.12-blackwell"
+	kvCacheDtypeFP8        = "fp8"
+	mlnodeBlackwellSuffix  = "-blackwell"
+	mlnodeBlackwellDefault = "3.0.12-blackwell"
 )
 
 // GPUDetection detects available GPUs and recommends configuration.
@@ -84,7 +87,17 @@ func (p *GPUDetection) Run(ctx context.Context, state *config.State) error {
 	state.GPUMemoryUtil = rec.MemoryUtil
 	state.MaxModelLen = rec.MaxModelLen
 	state.KVCacheDtype = rec.KVCacheDtype
-	state.MLNodeImageTag = selectMLNodeImage(gpus[0].Architecture)
+	// For Blackwell GPUs, try to discover latest blackwell tag from registry
+	var registryBlackwellTag string
+	if IsBlackwellArch(gpus[0].Architecture) {
+		ui.Info("Blackwell GPU detected, checking registry for latest image...")
+		registryBlackwellTag = fetchLatestBlackwellTag()
+		if registryBlackwellTag != "" {
+			ui.Success("Found latest blackwell image: %s", registryBlackwellTag)
+		}
+	}
+
+	state.MLNodeImageTag = selectMLNodeImage(gpus[0].Architecture, state.Versions.MLNode, registryBlackwellTag)
 	state.AttentionBackend = selectAttentionBackend(gpus[0].Architecture)
 
 	ui.Header("Recommended Configuration")
@@ -242,18 +255,105 @@ func detectTopology(gpus []config.GPUInfo) config.GPUTopology {
 	return config.GPUTopology{HasNVLink: false, PCIeVersion: "4.0", Interconnect: "pcie"}
 }
 
-// selectMLNodeImage returns the appropriate mlnode image tag based on GPU architecture
-func selectMLNodeImage(arch string) string {
+// IsBlackwellArch returns true if the GPU architecture requires the blackwell mlnode image.
+func IsBlackwellArch(arch string) bool {
 	switch arch {
-	case "sm_90", "sm_90a": // H100, H200
-		return "3.0.12"
-	case "sm_100": // B200, B300
-		return mlnodeBlackwellTag
-	case "sm_120": // RTX 5090
-		return mlnodeBlackwellTag // sm120 build when available
+	case "sm_100", "sm_103", "sm_120":
+		return true
 	default:
+		return false
+	}
+}
+
+// selectMLNodeImage returns the appropriate mlnode image tag based on GPU architecture.
+// For Blackwell GPUs, uses registryTag if available (from GHCR lookup), otherwise
+// appends "-blackwell" suffix to the fetched version.
+func selectMLNodeImage(arch string, fetchedVersion string, registryTag string) string {
+	if !IsBlackwellArch(arch) {
+		if fetchedVersion != "" {
+			return fetchedVersion
+		}
 		return "3.0.12"
 	}
+
+	// Blackwell: prefer registry-discovered tag
+	if registryTag != "" {
+		return registryTag
+	}
+
+	// Fallback: append -blackwell suffix to fetched version
+	baseTag := fetchedVersion
+	if baseTag == "" {
+		baseTag = "3.0.12"
+	}
+	if !strings.Contains(baseTag, "blackwell") {
+		return baseTag + mlnodeBlackwellSuffix
+	}
+	return baseTag
+}
+
+// fetchLatestBlackwellTag queries the GHCR registry for the latest mlnode blackwell tag.
+// Returns empty string on failure (caller should fall back to suffix convention).
+func fetchLatestBlackwellTag() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Get anonymous token for GHCR
+	tokenURL := "https://ghcr.io/token?scope=repository:product-science/mlnode:pull"
+	req, err := http.NewRequestWithContext(ctx, "GET", tokenURL, nil)
+	if err != nil {
+		return ""
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var tokenResp struct {
+		Token string `json:"token"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&tokenResp) != nil || tokenResp.Token == "" {
+		return ""
+	}
+
+	// Fetch tags list
+	tagsURL := "https://ghcr.io/v2/product-science/mlnode/tags/list"
+	req, err = http.NewRequestWithContext(ctx, "GET", tagsURL, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Authorization", "Bearer "+tokenResp.Token)
+
+	resp, err = client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var tagsResp struct {
+		Tags []string `json:"tags"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&tagsResp) != nil {
+		return ""
+	}
+
+	// Find latest blackwell tag (convention: "X.Y.Z-postN-blackwell", not sm120/alpha)
+	var best string
+	for _, tag := range tagsResp.Tags {
+		if !strings.HasSuffix(tag, "-blackwell") {
+			continue
+		}
+		// Skip experimental tags (sm120, alpha, fp8 variants)
+		if strings.Contains(tag, "sm120") || strings.Contains(tag, "alpha") || strings.Contains(tag, "fp8") {
+			continue
+		}
+		if best == "" || tag > best {
+			best = tag
+		}
+	}
+	return best
 }
 
 // selectAttentionBackend returns the vLLM attention backend for the GPU architecture.

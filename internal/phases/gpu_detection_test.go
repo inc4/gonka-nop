@@ -205,22 +205,30 @@ func TestDetectTopology(t *testing.T) {
 
 func TestSelectMLNodeImage(t *testing.T) {
 	tests := []struct {
-		arch string
-		want string
+		name     string
+		arch     string
+		fetched  string
+		registry string
+		want     string
 	}{
-		{"sm_80", "3.0.12"},
-		{"sm_89", "3.0.12"},
-		{"sm_90", "3.0.12"},
-		{"sm_90a", "3.0.12"},
-		{"sm_100", mlnodeBlackwellTag},
-		{"sm_120", mlnodeBlackwellTag},
+		{"ampere no fetch", "sm_80", "", "", "3.0.12"},
+		{"ampere with fetch", "sm_80", "3.0.12-post6", "", "3.0.12-post6"},
+		{"hopper no fetch", "sm_90", "", "", "3.0.12"},
+		{"hopper with fetch", "sm_90", "3.0.12-post6", "", "3.0.12-post6"},
+		{"blackwell no fetch no registry", "sm_100", "", "", "3.0.12-blackwell"},
+		{"blackwell with fetch no registry", "sm_100", "3.0.12-post6", "", "3.0.12-post6-blackwell"},
+		{"blackwell with registry", "sm_100", "", "3.0.12-post6-blackwell", "3.0.12-post6-blackwell"},
+		{"blackwell registry overrides fetch", "sm_100", "3.0.12", "3.0.12-post6-blackwell", "3.0.12-post6-blackwell"},
+		{"blackwell fetch already has suffix", "sm_100", "3.0.12-blackwell", "", "3.0.12-blackwell"},
+		{"sm120 fallback", "sm_120", "", "", "3.0.12-blackwell"},
+		{"sm103 fallback", "sm_103", "", "", "3.0.12-blackwell"},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.arch, func(t *testing.T) {
-			got := selectMLNodeImage(tt.arch)
+		t.Run(tt.name, func(t *testing.T) {
+			got := selectMLNodeImage(tt.arch, tt.fetched, tt.registry)
 			if got != tt.want {
-				t.Errorf("selectMLNodeImage(%s) = %s, want %s", tt.arch, got, tt.want)
+				t.Errorf("selectMLNodeImage(%q, %q, %q) = %q, want %q", tt.arch, tt.fetched, tt.registry, got, tt.want)
 			}
 		})
 	}
