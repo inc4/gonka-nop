@@ -109,7 +109,8 @@ func (p *GPUDetection) Run(ctx context.Context, state *config.State) error {
 	if rec.KVCacheDtype == kvCacheDtypeFP8 {
 		ui.Detail("KV Cache Dtype: fp8 (tight VRAM — saves memory)")
 	}
-	ui.Detail("MLNode Image: ghcr.io/product-science/mlnode:%s", state.MLNodeImageTag)
+	defaultImage := "ghcr.io/product-science/mlnode:" + state.MLNodeImageTag
+	ui.Detail("MLNode Image: %s", defaultImage)
 	ui.Detail("Attention Backend: %s", state.AttentionBackend)
 
 	if !topology.HasNVLink && len(gpus) > 1 {
@@ -117,6 +118,39 @@ func (p *GPUDetection) Run(ctx context.Context, state *config.State) error {
 	}
 
 	ui.Success("Configuration optimized for %d GPUs", len(gpus))
+
+	// Prompt for custom MLNode image override (skip if already set via --mlnode-image flag)
+	if state.CustomMLNodeImage == "" {
+		customImage, err := ui.Input(
+			"Custom MLNode image (leave empty for default)",
+			"",
+		)
+		if err != nil {
+			return fmt.Errorf("MLNode image prompt: %w", err)
+		}
+		if customImage != "" {
+			state.CustomMLNodeImage = customImage
+			ui.Info("Using custom MLNode image: %s", customImage)
+		}
+	} else {
+		ui.Info("Using custom MLNode image (from --mlnode-image): %s", state.CustomMLNodeImage)
+	}
+
+	// Prompt for attention backend selection
+	backendOptions := []string{
+		"FLASHINFER (default, recommended)",
+		"FLASH_ATTN (lower memory, for constrained setups)",
+	}
+	selectedBackend, err := ui.Select("Attention backend", backendOptions)
+	if err != nil {
+		return fmt.Errorf("attention backend prompt: %w", err)
+	}
+	if strings.Contains(selectedBackend, "FLASH_ATTN") {
+		state.AttentionBackend = "FLASH_ATTN"
+	} else {
+		state.AttentionBackend = "FLASHINFER"
+	}
+
 	return nil
 }
 

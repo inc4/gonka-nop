@@ -108,6 +108,7 @@ func setupOverrides() {
 		{flagExtAPIPort, "External API"},
 		{flagIntP2PPort, "Internal P2P"},
 		{flagIntAPIPort, "Internal API"},
+		{flagAttentionBackend, "Attention backend"},
 	}
 	for _, o := range overrides {
 		if o.flag != "" {
