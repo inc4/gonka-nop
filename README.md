@@ -7,6 +7,17 @@
 
 One-command CLI for deploying GPU-accelerated Gonka AI inference nodes. Auto-detects GPUs, configures NVIDIA runtime, generates optimized configs, and deploys containers with security hardening.
 
+## What's New (v0.2.1-rc5)
+
+### Blackwell GPU support improvements
+- **Auto-detect latest Blackwell image**: queries GHCR registry for the latest `-blackwell` tag (e.g., `3.0.12-post6-blackwell`) instead of using a hardcoded version. Falls back to suffix convention if registry is unreachable.
+- **`--mlnode-image` flag**: override the MLNode Docker image entirely for custom builds (e.g., `ghcr.io/segovchik/gonka-b300-image:3.0.13-b300-tp1`). Takes highest priority over all auto-detection.
+- **`--attention-backend` flag**: choose between `FLASHINFER` (default) and `FLASH_ATTN` (lower memory footprint for constrained setups like 2×B200 where FlashInfer workspace causes OOM).
+- **Interactive prompts**: setup wizard now asks for custom image and attention backend after showing recommended config. Skipped in `--yes` mode when flags are provided.
+
+### Bug fix
+- **`gonka-nop status` broken as root**: when `state.json` loaded successfully but `AdminURL` was empty, all HTTP requests silently failed. Non-root users weren't affected because they couldn't read `state.json` (0600 permissions), triggering the default-URL fallback path. Fixed by always initializing `StatusConfig` from defaults before overriding with state values.
+
 ## Demo
 
 [![Gonka NOP Demo](https://img.youtube.com/vi/0w6bIEROxUQ/maxresdefault.jpg)](https://youtu.be/0w6bIEROxUQ?si=FJywggqlVax90Ohn)
@@ -181,6 +192,8 @@ gonka-nop ml-node list
 | `--public-ip` | Server public/private IP | All |
 | `--hf-home` | HuggingFace cache directory | `full`, `mlnode` |
 | `--account-pubkey` | Account public key (secure workflow) | `full`, `network` |
+| `--mlnode-image` | Custom MLNode Docker image (overrides auto-detection) | `full`, `mlnode` |
+| `--attention-backend` | vLLM attention backend: `FLASHINFER` or `FLASH_ATTN` | `full`, `mlnode` |
 | `-y, --yes` | Non-interactive mode | All |
 | `-o, --output` | Output directory (default: `./gonka-node`) | All |
 
