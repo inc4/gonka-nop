@@ -158,14 +158,21 @@ func (p *MLNodeConfig) generateMLNodeConfigs(state *config.State) error {
 
 // generateMLNodeCompose generates docker-compose.mlnode.yml for standalone ML node.
 func (p *MLNodeConfig) generateMLNodeCompose(state *config.State) error {
-	// Image tag priority: GitHub version (most current) > GPU detection > hardcoded fallback
-	mlnodeTag := DefaultMLNodeImageTag
-	if state.Versions.MLNode != "" {
-		mlnodeTag = state.Versions.MLNode
-	} else if state.MLNodeImageTag != "" {
-		mlnodeTag = state.MLNodeImageTag
+	// Image priority: custom full image > GPU detection tag > GitHub version > hardcoded fallback
+	var mlnodeImage string
+	if state.CustomMLNodeImage != "" {
+		mlnodeImage = state.CustomMLNodeImage
+	} else {
+		mlnodeTag := state.MLNodeImageTag
+		if mlnodeTag == "" {
+			if state.Versions.MLNode != "" {
+				mlnodeTag = state.Versions.MLNode
+			} else {
+				mlnodeTag = DefaultMLNodeImageTag
+			}
+		}
+		mlnodeImage = DefaultMLNodeImage + ":" + mlnodeTag
 	}
-	mlnodeImage := DefaultMLNodeImage + ":" + mlnodeTag
 
 	nginxImage := "nginx:1.28.0"
 	if state.Versions.Nginx != "" {
