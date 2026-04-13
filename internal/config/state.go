@@ -79,17 +79,18 @@ type State struct {
 	KeyringDir      string `json:"keyring_dir,omitempty"`
 
 	// GPU Configuration
-	GPUs             []GPUInfo   `json:"gpus,omitempty"`
-	GPUTopology      GPUTopology `json:"gpu_topology,omitempty"`
-	DriverInfo       DriverInfo  `json:"driver_info,omitempty"`
-	SelectedModel    string      `json:"selected_model,omitempty"`
-	TPSize           int         `json:"tp_size,omitempty"`
-	PPSize           int         `json:"pp_size,omitempty"`
-	GPUMemoryUtil    float64     `json:"gpu_memory_util,omitempty"`   // 0.88-0.94 recommended
-	MaxModelLen      int         `json:"max_model_len,omitempty"`     // calculated from VRAM
-	KVCacheDtype     string      `json:"kv_cache_dtype,omitempty"`    // "auto" or "fp8"
-	MLNodeImageTag   string      `json:"mlnode_image_tag,omitempty"`  // "3.0.12", "3.0.12-blackwell", etc.
-	AttentionBackend string      `json:"attention_backend,omitempty"` // "FLASH_ATTN" or "FLASHINFER"
+	GPUs              []GPUInfo   `json:"gpus,omitempty"`
+	GPUTopology       GPUTopology `json:"gpu_topology,omitempty"`
+	DriverInfo        DriverInfo  `json:"driver_info,omitempty"`
+	SelectedModel     string      `json:"selected_model,omitempty"`
+	TPSize            int         `json:"tp_size,omitempty"`
+	PPSize            int         `json:"pp_size,omitempty"`
+	GPUMemoryUtil     float64     `json:"gpu_memory_util,omitempty"`     // 0.88-0.94 recommended
+	MaxModelLen       int         `json:"max_model_len,omitempty"`       // calculated from VRAM
+	KVCacheDtype      string      `json:"kv_cache_dtype,omitempty"`      // "auto" or "fp8"
+	MLNodeImageTag    string      `json:"mlnode_image_tag,omitempty"`    // "3.0.12", "3.0.12-blackwell", etc.
+	AttentionBackend  string      `json:"attention_backend,omitempty"`   // "FLASH_ATTN" or "FLASHINFER"
+	CustomMLNodeImage string      `json:"custom_mlnode_image,omitempty"` // full image override (e.g., "ghcr.io/segovchik/gonka-b300-image:3.0.13-b300-tp1")
 
 	// Paths
 	OutputDir string `json:"output_dir"`

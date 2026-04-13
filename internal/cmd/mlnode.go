@@ -2,15 +2,19 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/inc4/gonka-nop/internal/config"
+	"github.com/inc4/gonka-nop/internal/docker"
 	"github.com/inc4/gonka-nop/internal/status"
 	"github.com/inc4/gonka-nop/internal/ui"
 	"github.com/spf13/cobra"
@@ -32,6 +36,7 @@ func init() {
 	mlNodeCmd.AddCommand(mlNodeEnableCmd)
 	mlNodeCmd.AddCommand(mlNodeDisableCmd)
 	mlNodeCmd.AddCommand(mlNodeAddCmd)
+	mlNodeCmd.AddCommand(mlNodeSetImageCmd)
 
 	mlNodeAddCmd.Flags().StringVar(&mlNodeAddConfigFile, "config", "", "Path to JSON registration file (e.g., mlnode-registration.json)")
 }
@@ -535,4 +540,132 @@ func formatStatusAge(d time.Duration) string {
 		return fmt.Sprintf("%dm ago", int(d.Minutes()))
 	}
 	return fmt.Sprintf("%dh ago", int(d.Hours()))
+}
+
+// --- Set Image Command ---
+
+var mlNodeSetImageCmd = &cobra.Command{
+	Use:   "set-image <image>",
+	Short: "Change the MLNode Docker image and restart",
+	Long: `Update the MLNode Docker image in docker-compose.mlnode.yml, pull the new image,
+and recreate the container. Performs a safe rollout: disable → update → pull → recreate → enable.
+
+Examples:
+  gonka-nop ml-node set-image ghcr.io/product-science/mlnode:3.0.12-post6-blackwell
+  gonka-nop ml-node set-image ghcr.io/segovchik/gonka-b300-image:3.0.13-b300-tp1`,
+	Args: cobra.ExactArgs(1),
+	RunE: runMLNodeSetImage,
+}
+
+func runMLNodeSetImage(cmd *cobra.Command, args []string) error {
+	newImage := args[0]
+	ctx := cmd.Context()
+
+	state, err := config.Load(outputDir)
+	if err != nil {
+		return fmt.Errorf("load state: %w", err)
+	}
+
+	composePath := filepath.Join(state.OutputDir, "docker-compose.mlnode.yml")
+	content, err := os.ReadFile(composePath) // #nosec G304 - path from trusted config
+	if err != nil {
+		return fmt.Errorf("read compose file: %w", err)
+	}
+
+	// Replace the image line in compose
+	oldContent := string(content)
+	newContent := replaceComposeImage(oldContent, newImage)
+	if oldContent == newContent {
+		return fmt.Errorf("could not find mlnode image line in %s", composePath)
+	}
+
+	// Show what's changing
+	oldImage := extractComposeImage(oldContent)
+	ui.Header("MLNode Image Update")
+	ui.Detail("Current: %s", oldImage)
+	ui.Detail("New:     %s", newImage)
+
+	// Write updated compose
+	if err := os.WriteFile(composePath, []byte(newContent), 0600); err != nil {
+		return fmt.Errorf("write compose file: %w", err)
+	}
+	ui.Success("Updated %s", composePath)
+
+	// Update state
+	state.CustomMLNodeImage = newImage
+	if err := state.Save(); err != nil {
+		ui.Warn("Could not save state: %v", err)
+	}
+
+	// Disable ML node
+	nodeID := state.MLNodeID
+	if nodeID == "" {
+		nodeID = defaultNodeID
+	}
+	ui.Info("Disabling ML node %q...", nodeID)
+	_ = postAdminAction(adminURL, nodeID, "disable")
+
+	// Pull new image
+	ui.Info("Pulling new image...")
+	cc, err := docker.NewComposeClient(state)
+	if err != nil {
+		return fmt.Errorf("create compose client: %w", err)
+	}
+	pullCtx, pullCancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer pullCancel()
+	if err := cc.Pull(pullCtx); err != nil {
+		return fmt.Errorf("pull images: %w", err)
+	}
+
+	// Recreate container
+	ui.Info("Recreating mlnode-308...")
+	if err := cc.Up(ctx, "mlnode-308"); err != nil {
+		if err2 := cc.Up(ctx); err2 != nil {
+			return fmt.Errorf("recreate containers: %w", err2)
+		}
+	}
+	ui.Success("Container recreated with new image")
+
+	// Re-enable
+	ui.Info("Re-enabling ML node %q...", nodeID)
+	_ = postAdminAction(adminURL, nodeID, "enable")
+	ui.Success("ML node re-enabled")
+
+	return nil
+}
+
+// replaceComposeImage replaces the image line for the mlnode service in compose content.
+func replaceComposeImage(content, newImage string) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "image:") && (strings.Contains(content[:strings.Index(content, line)], "mlnode-308") || strings.Contains(trimmed, "mlnode")) {
+			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			lines[i] = indent + "image: " + newImage
+			break
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// extractComposeImage finds the current mlnode image from compose content.
+func extractComposeImage(content string) string {
+	inMLNode := false
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(trimmed, "mlnode-308") {
+			inMLNode = true
+			continue
+		}
+		if inMLNode && strings.HasPrefix(trimmed, "image:") {
+			return strings.TrimSpace(strings.TrimPrefix(trimmed, "image:"))
+		}
+		if inMLNode && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") && trimmed != "" {
+			inMLNode = false
+		}
+	}
+	return "unknown"
 }
