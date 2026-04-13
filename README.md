@@ -158,6 +158,138 @@ gonka-nop ml-node add
 gonka-nop ml-node list
 ```
 
+## GPU-Specific Deployment Guides
+
+NOP auto-detects GPU architecture and selects optimal settings. These guides document real-world tested configurations and known issues per hardware class.
+
+### 8× A100 SXM4 80GB (Ampere, sm_80)
+
+Standard configuration. Works out of the box.
+
+```bash
+gonka-nop setup
+```
+
+| Setting | Value |
+|---------|-------|
+| Image | `mlnode:3.0.12-post6` (auto-selected) |
+| TP | 4 (auto, NOP calculates PP=2 for 8 GPUs) |
+| Backend | FLASHINFER |
+| gpu-memory-utilization | 0.90 |
+| Weight (observed) | ~860 per ML node |
+
+### 2× B200 (Blackwell, sm_100)
+
+Blackwell image auto-detected. **Use FLASH_ATTN** to avoid FlashInfer workspace OOM with chain-enforced `max_model_len=240000`.
+
+```bash
+gonka-nop setup --attention-backend FLASH_ATTN
+```
+
+| Setting | Value |
+|---------|-------|
+| Image | `mlnode:3.0.12-post6-blackwell` (auto from GHCR) |
+| TP | 2 |
+| Backend | **FLASH_ATTN** (FLASHINFER causes OOM on 2×B200) |
+| gpu-memory-utilization | 0.88 |
+| Weight (observed) | ~920 with [T,T] timeslots |
+
+**Known issue:** The chain enforces `--max-model-len 240000` which pre-allocates a large KV cache. With TP=2 on 2×B200, FlashInfer's workspace buffer (~285MB) doesn't fit in the remaining free memory. Switching to FLASH_ATTN eliminates the workspace allocation entirely.
+
+### 4× B200 (Blackwell, sm_100)
+
+Works with alpha4 image or blackwell image. FLASHINFER is OK because TP=4 means less model weight per GPU → more headroom.
+
+```bash
+gonka-nop setup
+```
+
+| Setting | Value |
+|---------|-------|
+| Image | `mlnode:3.0.13-alpha4` or `3.0.12-post6-blackwell` |
+| TP | 4 |
+| Backend | FLASHINFER (enough headroom at TP=4) |
+| gpu-memory-utilization | 0.90 |
+| Weight (observed) | ~2,178 |
+
+### 8× B300 SXM6 AC (Blackwell Ultra, sm_103a)
+
+Requires custom image — standard and blackwell images lack sm_103a CUTLASS kernels. Must use `vllm/vllm-openai:v0.15.1-cu130` as base.
+
+```bash
+gonka-nop setup \
+  --mlnode-image ghcr.io/segovchik/gonka-b300-image:3.0.13-b300-tp1
+```
+
+| Setting | Value |
+|---------|-------|
+| Image | **Custom** (`ghcr.io/segovchik/gonka-b300-image:3.0.13-b300-tp1`) |
+| TP | 1 (8 independent instances, one per GPU) |
+| Backend | FLASHINFER |
+| gpu-memory-utilization | 0.95 |
+| max-model-len | 131072 |
+| max-num-seqs | 128 |
+| Weight (observed) | ~7,700–8,300 |
+| PoC throughput | ~8,700 nonces/min |
+
+**Why custom image?** B300 (sm_103a) needs:
+1. CUDA 13.0 base (`vllm/vllm-openai:v0.15.1-cu130`) for CUTLASS kernel compatibility
+2. Triton ptxas 13.0 (replacing bundled 12.8 that doesn't know sm_103a)
+3. Runner patches: TP=1 for maximum PoC throughput (8 instances vs 2 with TP=4)
+
+**Host requirement:** `cuda-compat-13-0` package must be installed if host CUDA toolkit < 13.0. Mount compat libs into container:
+```yaml
+# docker-compose.mlnode.yml
+volumes:
+  - /usr/local/cuda-13.0/compat:/usr/local/cuda/compat:ro
+environment:
+  - LD_LIBRARY_PATH=/usr/local/cuda/compat
+```
+
+See [B300 deployment report](docs/b300-mlnode-deployment.md) for the full build process.
+
+### 8× H100/H200 SXM 80GB (Hopper, sm_90)
+
+Standard configuration similar to A100.
+
+```bash
+gonka-nop setup
+```
+
+| Setting | Value |
+|---------|-------|
+| Image | `mlnode:3.0.12-post6` (auto-selected) |
+| TP | 4 or 8 (NVLink full mesh enables TP=8) |
+| Backend | FLASHINFER |
+| gpu-memory-utilization | 0.90 |
+
+### Changing Image on a Running Node
+
+Use `ml-node set-image` to swap the MLNode image without full re-setup:
+
+```bash
+# Switch to blackwell image
+gonka-nop ml-node set-image ghcr.io/product-science/mlnode:3.0.12-post6-blackwell
+
+# Switch to custom B300 image
+gonka-nop ml-node set-image ghcr.io/segovchik/gonka-b300-image:3.0.13-b300-tp1
+```
+
+This performs a safe rollout: disable → update compose → pull → recreate → enable.
+
+### Spot Instance Recovery
+
+If a spot/preemptible instance is killed and reprovisioned with the old data disk attached:
+
+1. Mount old disk: `mount /dev/vdb4 /mnt`
+2. Move Docker storage: set `data-root` in `/etc/docker/daemon.json` to mounted disk
+3. Symlink gonka-node: `ln -sf /mnt/root/gonka-node /root/gonka-node`
+4. Fix HF cache path: `ln -sf /mnt/mnt/shared/huggingface /mnt/shared/huggingface`
+5. Install CUDA compat if needed: `apt-get install cuda-compat-13-0`
+6. Start: `set -a && source config.env && set +a && docker compose up -d`
+
+Keys, chain data, and model cache survive on the persistent disk. No re-registration needed if IP stays the same.
+
 ## Commands
 
 | Command | Description |
@@ -174,6 +306,7 @@ gonka-nop ml-node list
 | `ml-node add` | Register a new ML node (from file or interactive) |
 | `ml-node status` | Detailed ML node status |
 | `ml-node enable/disable` | Enable or disable an ML node |
+| `ml-node set-image` | Change MLNode Docker image and restart (safe rollout) |
 | `download-model` | Pre-download model weights before setup |
 | `reset` | Stop containers and clean up |
 | `cleanup` | Recover disk space |
