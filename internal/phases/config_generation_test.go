@@ -580,7 +580,7 @@ func TestGenerateMLNodeCompose(t *testing.T) {
 
 	state := config.NewState(tmpDir)
 	state.SelectedModel = "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
-	state.MLNodeImageTag = mlnodeBlackwellTag
+	state.MLNodeImageTag = mlnodeBlackwellDefault
 	state.AttentionBackend = defaultAttentionBackend
 	state.HFHome = defaultHFHome
 
@@ -600,7 +600,7 @@ func TestGenerateMLNodeCompose(t *testing.T) {
 	}{
 		{"mlnode-308 service", "mlnode-308:"},
 		{"mlnode-308 container name", "container_name: mlnode-308"},
-		{"MLNode image tag", "mlnode:" + mlnodeBlackwellTag},
+		{"MLNode image tag", "mlnode:" + mlnodeBlackwellDefault},
 		{"Attention backend", "VLLM_ATTENTION_BACKEND=FLASHINFER"},
 		{"HF_HOME env", "HF_HOME=" + defaultHFHome},
 		{"HF_HOME volume", defaultHFHome + ":" + defaultHFHome},

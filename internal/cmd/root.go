@@ -126,9 +126,8 @@ func runStatus(_ *cobra.Command, _ []string) error {
 		var cfg *status.StatusConfig
 		state, loadErr := config.Load(outputDir)
 		if loadErr == nil && state != nil {
-			cfg = &status.StatusConfig{
-				NodeType: state.EffectiveNodeType(),
-			}
+			cfg = status.DefaultConfig()
+			cfg.NodeType = state.EffectiveNodeType()
 			if state.AdminURL != "" {
 				cfg.AdminURL = state.AdminURL
 			}

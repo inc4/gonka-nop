@@ -321,7 +321,8 @@ type StatusConfig struct {
 	NodeType      string // "full", "network", "mlnode" (empty = "full")
 }
 
-func defaultConfig() *StatusConfig {
+// DefaultConfig returns a StatusConfig with default localhost URLs.
+func DefaultConfig() *StatusConfig {
 	return &StatusConfig{
 		TendermintURL: "http://localhost:26657",
 		AdminURL:      "http://localhost:9200",
@@ -338,7 +339,7 @@ func FetchStatus(outputDir string) (*NodeStatus, error) {
 // If cfg is nil, default localhost URLs are used.
 func FetchStatusWithConfig(_ string, cfg *StatusConfig) (*NodeStatus, error) {
 	if cfg == nil {
-		cfg = defaultConfig()
+		cfg = DefaultConfig()
 	}
 	nodeType := cfg.NodeType
 	status := &NodeStatus{}
