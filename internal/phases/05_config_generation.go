@@ -28,12 +28,9 @@ const (
 	defaultHFHome           = DefaultHFHome
 )
 
-// SupportedModels lists the models supported by the Gonka network.
-var SupportedModels = []string{
-	"Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
-	"Qwen/QwQ-32B",
-	"Qwen/Qwen3-32B-FP8",
-}
+// SupportedModels has moved to model_recipes.go as a
+// map[string]ModelRecipe. Use SupportedModelNames() for the deterministic
+// string slice that was previously inlined here.
 
 // ConfigGeneration generates configuration files
 type ConfigGeneration struct{}
@@ -516,11 +513,31 @@ func generateNodeConfig(state *config.State) error {
 }
 
 // buildVLLMArgs builds the vLLM command-line arguments from state.
+//
+// When state.SelectedModel maps to a SupportedModels recipe whose VLLMArgs
+// is non-nil, the recipe args are emitted verbatim (the recipe is
+// authoritative — recommended for new models like Kimi-K2.6 that require
+// model-specific parsers and attention backends).
+//
+// Otherwise (legacy path for Qwen3-235B / Qwen3-32B-FP8 / QwQ-32B and any
+// model not in the registry), args are derived from state. This keeps
+// existing operators byte-compatible across the M11 upgrade (NFR-M11-5).
+//
 // Note: --quantization fp8 is NOT added even for FP8 models — the mlnode runner
 // uses dtype=float16 which avoids FP8 block_n alignment errors with MoE experts.
 // Note: --pipeline-parallel-size is NOT added — the mlnode runner auto-calculates
 // PP from available GPUs (e.g. 8 GPUs / TP=4 → PP=2).
 func buildVLLMArgs(state *config.State) []string {
+	if state.SelectedModel != "" {
+		if recipe, ok := SupportedModels[state.SelectedModel]; ok && len(recipe.VLLMArgs) > 0 {
+			// Recipe authoritative: return a defensive copy so callers can't
+			// mutate the registry.
+			out := make([]string, len(recipe.VLLMArgs))
+			copy(out, recipe.VLLMArgs)
+			return out
+		}
+	}
+
 	var args []string
 
 	// GPU memory utilization (0.88-0.94, not 0.9/0.99)

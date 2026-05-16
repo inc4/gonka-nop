@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -80,7 +81,13 @@ func (p *GPUDetection) Run(ctx context.Context, state *config.State) error {
 		return err
 	}
 
-	rec := recommendConfig(len(gpus), gpus[0].MemoryMB, gpus[0].Architecture, topology.HasNVLink)
+	rec, err := recommendConfig(len(gpus), gpus[0].MemoryMB, gpus[0].Architecture, topology.HasNVLink, state.SelectedModel)
+	if err != nil {
+		// Recipe gate failed (arch or VRAM mismatch). Surface the reason and
+		// abort phase 02 before any files are written — see AC-M11-2 / UC-1-E2.
+		ui.Error("%v", err)
+		return err
+	}
 	state.TPSize = rec.TP
 	state.PPSize = rec.PP
 	state.SelectedModel = rec.Model
@@ -97,7 +104,7 @@ func (p *GPUDetection) Run(ctx context.Context, state *config.State) error {
 		}
 	}
 
-	state.MLNodeImageTag = selectMLNodeImage(gpus[0].Architecture, state.Versions.MLNode, registryBlackwellTag)
+	state.MLNodeImageTag = selectMLNodeImage(gpus[0].Architecture, state.Versions.MLNode, registryBlackwellTag, state.SelectedModel)
 	state.AttentionBackend = selectAttentionBackend(gpus[0].Architecture)
 
 	ui.Header("Recommended Configuration")
@@ -207,7 +214,58 @@ type GPURecommendation struct {
 
 // recommendConfig returns recommended configuration based on GPU setup.
 // Incorporates validator chat findings: memory utilization 0.88-0.94, fp8 kv-cache for tight VRAM.
-func recommendConfig(gpuCount int, vramMB int, _ string, _ bool) GPURecommendation {
+//
+// When requestedModel is non-empty the recipe is looked up in SupportedModels;
+// the recommendation is gated on GPUArchAllowed and MinTotalVRAMGB, and the
+// recipe's authoritative VLLMArgs (if any) are surfaced via state.SelectedModel
+// → buildVLLMArgs. When requestedModel is "", the existing total-VRAM tier
+// logic picks a default model (backward compat — NFR-M11-5).
+func recommendConfig(gpuCount int, vramMB int, arch string, _ bool, requestedModel string) (GPURecommendation, error) {
+	totalVRAM := gpuCount * vramMB
+
+	if requestedModel != "" {
+		recipe, ok := SupportedModels[requestedModel]
+		if !ok {
+			return GPURecommendation{}, fmt.Errorf("model %q is not a governance-approved recipe (known: %v)",
+				requestedModel, SupportedModelNames())
+		}
+		if len(recipe.GPUArchAllowed) > 0 {
+			allowed := false
+			for _, a := range recipe.GPUArchAllowed {
+				if a == arch {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return GPURecommendation{}, fmt.Errorf("model %q requires GPU architecture in %v but host has %q (e.g. Kimi-K2.6 needs Blackwell: sm_100/sm_103/sm_120)",
+					requestedModel, recipe.GPUArchAllowed, arch)
+			}
+		}
+		if recipe.MinTotalVRAMGB > 0 && totalVRAM < recipe.MinTotalVRAMGB*1024 {
+			return GPURecommendation{}, fmt.Errorf("model %q requires at least %d GB total VRAM but host has %.1f GB",
+				requestedModel, recipe.MinTotalVRAMGB, float64(totalVRAM)/1024)
+		}
+		// Recipe accepted. Start from the tier-based defaults so legacy UI
+		// display fields (TP/MemoryUtil/MaxModelLen) get sensible values,
+		// then override Model and (when VLLMArgs is populated) the args-derived
+		// fields so the display matches what buildVLLMArgs will emit.
+		rec := tierRecommendation(gpuCount, vramMB)
+		rec.Model = requestedModel
+		if len(recipe.VLLMArgs) > 0 {
+			deriveDisplayFromArgs(&rec, recipe.VLLMArgs)
+		}
+		return rec, nil
+	}
+
+	return tierRecommendation(gpuCount, vramMB), nil
+}
+
+// tierRecommendation picks a model + vLLM params based on raw GPU capacity.
+// Preserves the historical tier logic; only the "" requestedModel path uses
+// it directly. The recipe path uses it as the base before overlaying recipe
+// fields. Behavior under "" requestedModel is byte-identical to pre-M11.
+func tierRecommendation(gpuCount int, vramMB int) GPURecommendation {
 	totalVRAM := gpuCount * vramMB
 
 	switch {
@@ -276,6 +334,32 @@ func recommendConfig(gpuCount int, vramMB int, _ string, _ bool) GPURecommendati
 	}
 }
 
+// deriveDisplayFromArgs scrapes TP / MemoryUtil / MaxModelLen / KVCacheDtype
+// from a recipe's VLLMArgs so the UI display in phase 02 Run() reflects what
+// buildVLLMArgs will actually emit. The fields are display-only when a recipe
+// is authoritative; only Kimi-style recipes (with VLLMArgs populated) reach
+// this helper. Skips fields not present in args.
+func deriveDisplayFromArgs(rec *GPURecommendation, args []string) {
+	for i := 0; i < len(args)-1; i++ {
+		switch args[i] {
+		case "--tensor-parallel-size":
+			if v, err := strconv.Atoi(args[i+1]); err == nil {
+				rec.TP = v
+			}
+		case "--gpu-memory-utilization":
+			if v, err := strconv.ParseFloat(args[i+1], 64); err == nil {
+				rec.MemoryUtil = v
+			}
+		case "--max-model-len":
+			if v, err := strconv.Atoi(args[i+1]); err == nil {
+				rec.MaxModelLen = v
+			}
+		case "--kv-cache-dtype":
+			rec.KVCacheDtype = args[i+1]
+		}
+	}
+}
+
 // detectTopology returns GPU interconnect topology.
 // NVLink detection is name-based for known GPUs.
 func detectTopology(gpus []config.GPUInfo) config.GPUTopology {
@@ -299,11 +383,26 @@ func IsBlackwellArch(arch string) bool {
 	}
 }
 
-// selectMLNodeImage returns the appropriate mlnode image tag based on GPU architecture.
-// For Blackwell GPUs, uses registryTag if available (from GHCR lookup), otherwise
-// appends "-blackwell" suffix to the fetched version.
-func selectMLNodeImage(arch string, fetchedVersion string, registryTag string) string {
-	if !IsBlackwellArch(arch) {
+// selectMLNodeImage returns the appropriate mlnode image tag.
+// Precedence (Review Notes F4):
+//  1. If requestedModel is a registered recipe with ImageVariant=="blackwell",
+//     the blackwell image is selected regardless of GPU architecture. This
+//     keeps recipe authority (a Blackwell-only model picks blackwell even if
+//     somehow scheduled on a different arch, where the recommender would
+//     normally have rejected it earlier in recommendConfig).
+//  2. Otherwise fall back to arch-based detection (IsBlackwellArch).
+//  3. Within the blackwell branch, prefer the registryTag (GHCR-discovered),
+//     else append the -blackwell suffix to fetchedVersion (or to "3.0.12").
+//  4. Within the standard branch, return fetchedVersion or "3.0.12".
+func selectMLNodeImage(arch, fetchedVersion, registryTag, requestedModel string) string {
+	wantBlackwell := IsBlackwellArch(arch)
+	if !wantBlackwell && requestedModel != "" {
+		if recipe, ok := SupportedModels[requestedModel]; ok && recipe.ImageVariant == "blackwell" {
+			wantBlackwell = true
+		}
+	}
+
+	if !wantBlackwell {
 		if fetchedVersion != "" {
 			return fetchedVersion
 		}

@@ -122,7 +122,7 @@ func resolveDownloadParams(args []string) (*downloadParams, error) {
 	} else if state != nil && state.SelectedModel != "" {
 		params.Model = state.SelectedModel
 	} else {
-		selected, err := ui.Select("Select model to download:", phases.SupportedModels)
+		selected, err := ui.Select("Select model to download:", phases.SupportedModelNames())
 		if err != nil {
 			return nil, err
 		}
