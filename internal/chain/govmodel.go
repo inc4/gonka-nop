@@ -158,8 +158,9 @@ func ListPoCDelegations(ctx context.Context, qr QueryRunner, participant string)
 
 type pocDelegationResp struct {
 	Delegations []struct {
-		ModelID  string `json:"model_id"`
-		Delegate string `json:"delegate"`
+		ModelID    string `json:"model_id"`
+		Delegator  string `json:"delegator"`   // mainnet returns this — we ignore (== caller's addr)
+		DelegateTo string `json:"delegate_to"` // mainnet uses delegate_to, NOT delegate
 	} `json:"delegations"`
 	Refusals []struct {
 		ModelID string `json:"model_id"`
@@ -176,7 +177,7 @@ func parsePoCDelegationResponse(jsonBytes []byte) ([]PoCDelegationState, error) 
 	}
 	var out []PoCDelegationState
 	for _, d := range r.Delegations {
-		out = append(out, PoCDelegationState{ModelID: d.ModelID, Delegate: d.Delegate})
+		out = append(out, PoCDelegationState{ModelID: d.ModelID, Delegate: d.DelegateTo})
 	}
 	for _, ref := range r.Refusals {
 		out = append(out, PoCDelegationState{ModelID: ref.ModelID, Refused: true})

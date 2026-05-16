@@ -90,8 +90,10 @@ func TestDeclarePoCIntent_BuildsCorrectArgs(t *testing.T) {
 }
 
 func TestParsePoCDelegationResponse(t *testing.T) {
+	// Matches the actual mainnet schema verified 2026-05-16: chain returns
+	// `delegate_to` (not `delegate`), plus an echoed `delegator` field we ignore.
 	body := `{
-		"delegations": [{"model_id": "moonshotai/Kimi-K2.6", "delegate": "gonka1xyz"}],
+		"delegations": [{"model_id": "moonshotai/Kimi-K2.6", "delegator": "gonka1us", "delegate_to": "gonka1xyz"}],
 		"refusals":    [{"model_id": "Qwen/QwQ-32B"}],
 		"intents":     [{"model_id": "future/Model-v3"}]
 	}`
@@ -131,7 +133,7 @@ func TestParsePoCDelegationResponse_Malformed(t *testing.T) {
 }
 
 func TestListPoCDelegations_HappyPath(t *testing.T) {
-	qr := &fakeRunner{out: []byte(`{"delegations":[{"model_id":"moonshotai/Kimi-K2.6","delegate":"gonka1xyz"}]}`)}
+	qr := &fakeRunner{out: []byte(`{"delegations":[{"model_id":"moonshotai/Kimi-K2.6","delegator":"gonka1us","delegate_to":"gonka1xyz"}]}`)}
 	states, err := ListPoCDelegations(context.Background(), qr, "gonka1us")
 	if err != nil {
 		t.Fatalf("List: %v", err)
