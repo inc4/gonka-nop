@@ -45,6 +45,52 @@ type TxBroadcaster interface {
 	Broadcast(ctx context.Context, signerKey, password, action string, args ...string) (string, error)
 }
 
+// Verify dockerExecTxBroadcaster implements TxModuleBroadcaster.
+var _ TxModuleBroadcaster = (*dockerExecTxBroadcaster)(nil)
+
+// BroadcastModule runs `inferenced tx <module> <action> <args...>` allowing
+// targets other than the default "inference" module (e.g. "collateral").
+// Password is piped via cmd.Stdin (NEVER argv) per NFR-M11-6.
+func (b *dockerExecTxBroadcaster) BroadcastModule(ctx context.Context, module, signerKey, password, action string, args ...string) (string, error) {
+	chainID := b.State.ChainID
+	if chainID == "" {
+		chainID = "gonka-mainnet"
+	}
+	innerArgs := []string{"tx", module, action}
+	innerArgs = append(innerArgs, args...)
+	innerArgs = append(innerArgs,
+		"--from", signerKey,
+		"--chain-id", chainID,
+		"--keyring-backend", "file",
+		"--keyring-dir", "/root/.inference",
+		"--node", "http://node:26657",
+		"--gas", "200000",
+		"--fees", "0icoin",
+		"-y",
+	)
+	execArgs := append([]string{"exec", "-i", "api", "inferenced"}, innerArgs...)
+
+	var name string
+	var cmdArgs []string
+	if b.State.UseSudo {
+		name = docker.CmdSudo
+		cmdArgs = append([]string{"-E", docker.CmdDocker}, execArgs...)
+	} else {
+		name = docker.CmdDocker
+		cmdArgs = execArgs
+	}
+
+	cmd := exec.CommandContext(ctx, name, cmdArgs...) // #nosec G204
+	cmd.Dir = b.State.OutputDir
+	cmd.Stdin = strings.NewReader(password + "\n")
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return strings.TrimSpace(string(out)), fmt.Errorf("inferenced tx %s %s: %w", module, action, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // QueryRunnerFromState returns a QueryRunner wired to docker exec via state.
 // Reuses the unexported dockerExecQueryRunner from poc_safety.go.
 func QueryRunnerFromState(state *config.State) QueryRunner {
