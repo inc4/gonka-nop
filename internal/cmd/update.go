@@ -54,6 +54,9 @@ func init() {
 	// update command uses --admin-url as its own local flag.
 	updateCmd.Flags().StringVar(&updateAdminURL, "admin-url", defaultAdminURL, "Admin API URL")
 	updateCmd.Flags().BoolVarP(&updateYes, "yes", "y", false, "Skip confirmation prompts")
+
+	// M11: api-binary hotfix flags live in update_api.go for grep-ability.
+	registerUpdateAPIFlags()
 }
 
 // VersionDiff represents a version change for a single service.
@@ -79,6 +82,13 @@ func runUpdate(cmd *cobra.Command, _ []string) error {
 
 	if state.OutputDir == "" {
 		return fmt.Errorf("no deployment found in %s — run 'gonka-nop setup' first", outputDir)
+	}
+
+	// M11: --api-only short-circuits to the Cosmovisor hotfix installer.
+	// Mutually exclusive with --check (enforced by cobra) so we only land
+	// here when the operator explicitly asked for a hotfix.
+	if updateAPIOnly {
+		return runUpdateAPIOnly(ctx, state)
 	}
 
 	// Determine network type for fetching correct versions

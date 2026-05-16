@@ -27,6 +27,13 @@ type ImageVersions struct {
 	MLNode string `json:"mlnode"` // mlnode image tag (e.g. "3.0.12-post2")
 	Nginx  string `json:"nginx"`  // nginx image tag
 
+	// Cosmovisor-managed binaries (NOT image tags). Populated by the M11
+	// `update --api-only` flow; persists the LAST hotfix version applied so
+	// `status` and `update --check` can report it. Distinct from `API` because
+	// the Cosmovisor binary can diverge from the api image tag (the whole
+	// point of the race-releases hotfix channel).
+	APIBinaryVersion string `json:"api_binary_version,omitempty"`
+
 	// Metadata
 	FetchedAt time.Time `json:"fetched_at,omitempty"`
 	Source    string    `json:"source,omitempty"` // "github" or "fallback"
