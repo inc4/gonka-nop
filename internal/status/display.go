@@ -21,12 +21,73 @@ func Display(s *NodeStatus) {
 	printHeader("Gonka Node Status")
 
 	printOverview(s)
+	printSync(s)
 	printBlockchain(s)
 	printEpoch(s)
 	printMLNode(s)
 	printNodeConfig(s)
 	printSecurity(s)
 	printGovernanceModels(s)
+}
+
+// printSync renders the state-sync / block-sync diagnostic section. Always
+// shown when s.Sync is populated — even when fully synced it confirms the
+// state (operators want to see "Synced" reassuringly). Omitted only if
+// Sync is nil (mocked / not fetched).
+func printSync(s *NodeStatus) {
+	if s.Sync == nil {
+		return
+	}
+	printSection("Sync")
+	switch s.Sync.Phase {
+	case SyncPhaseSynced:
+		printOK("Synced at height %s", formatNumber(s.Blockchain.BlockHeight))
+	case SyncPhaseBlockSync:
+		if s.Sync.TargetHeight > s.Blockchain.BlockHeight {
+			printWarn("Block-syncing — %s of ~%s (lag %s)",
+				formatNumber(s.Blockchain.BlockHeight),
+				formatNumber(s.Sync.TargetHeight),
+				formatNumber(s.Sync.TargetHeight-s.Blockchain.BlockHeight))
+		} else {
+			printWarn("Block-syncing — at height %s", formatNumber(s.Blockchain.BlockHeight))
+		}
+	case SyncPhaseSnapshotApplying:
+		printWarn("State-syncing snapshot @ height %s — chunk %d/%d (%.0f%%)",
+			formatNumber(s.Sync.SnapshotHeight),
+			s.Sync.SnapshotChunkIdx, s.Sync.SnapshotChunkTotal,
+			s.Sync.SnapshotProgress*100)
+		if eta := s.Sync.EstimateETA(); eta > 0 {
+			printDetail("ETA", "~%s at observed chunk rate", eta.Round(10*time.Second))
+		}
+	case SyncPhaseSnapshotDiscover:
+		if s.Sync.SnapshotHeight > 0 {
+			printDetail("State-sync", "Discovered snapshot @ height %s, fetching chunks…",
+				formatNumber(s.Sync.SnapshotHeight))
+		} else {
+			printDetail("State-sync", "%s", s.Sync.Reason)
+		}
+	case SyncPhaseInitializing:
+		printWarn("Initializing — %s", s.Sync.Reason)
+	default:
+		printDetail("Status", "%s", s.Sync.Reason)
+	}
+	if s.Blockchain.PeerCountKnown || s.Sync.PeerCount > 0 {
+		printDetail("Peers", "%d connected", s.Sync.PeerCount)
+	}
+	if s.Sync.LastLogLine != "" && s.Sync.Phase != SyncPhaseSynced {
+		printDetail("Last log", "%s", truncate(s.Sync.LastLogLine, 110))
+	}
+}
+
+func printDetail(label, format string, args ...interface{}) {
+	_, _ = dimmed.Printf("  → "+label+": "+format+"\n", args...)
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n-1] + "…"
 }
 
 // printGovernanceModels appends a per-model PoC opt-in section. OMITTED
