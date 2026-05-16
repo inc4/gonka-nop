@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strconv"
 
 	"github.com/inc4/gonka-nop/internal/chain"
 	"github.com/inc4/gonka-nop/internal/config"
@@ -81,7 +83,7 @@ func runCollateralShow(cmd *cobra.Command, args []string) error {
 		ui.Info("To deposit: gonka-nop collateral deposit <amount> (e.g. 1000000ngonka)")
 		return nil
 	}
-	ui.Success("amount: %d %s", bal.Amount, bal.Denom)
+	ui.Success("amount: %s", formatAmount(bal.Amount, bal.Denom))
 	return nil
 }
 
@@ -127,11 +129,46 @@ func runCollateralTx(ctx context.Context, verb, action, amount string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w\n%s", verb, err, out)
 	}
-	ui.Success("%s broadcast: %s", verb, amount)
+
+	// Broadcast returns code=0 even when the tx will fail on-chain (the
+	// broadcast just means "accepted into mempool"). Parse the txhash and
+	// surface a clearer status. We do NOT block here on tx confirmation —
+	// callers can `gonka-nop collateral show` after a few seconds.
+	if txhash := extractTxHash(out); txhash != "" {
+		ui.Success("%s tx broadcast: %s (amount %s)", verb, txhash, amount)
+		ui.Info("Check status with: docker exec node wget -qO- http://localhost:26657/tx?hash=0x%s | jq .result.tx_result", txhash)
+		ui.Info("Or wait + run: gonka-nop collateral show")
+		return nil
+	}
+
+	// Fall-through if we couldn't parse a txhash — show raw output.
+	ui.Warn("%s broadcast returned no parseable txhash; raw output below", verb)
 	if out != "" {
 		ui.Detail("%s", out)
 	}
 	return nil
+}
+
+// txHashRe extracts the txhash line from `inferenced tx` YAML/JSON output.
+// Mainnet shape: "txhash: ABCD1234..." (YAML default) or {"txhash":"ABCD..."}
+var txHashRe = regexp.MustCompile(`(?m)^?\s*"?txhash"?\s*[:=]\s*"?([A-F0-9]{64})"?`)
+
+func extractTxHash(s string) string {
+	m := txHashRe.FindStringSubmatch(s)
+	if len(m) >= 2 {
+		return m[1]
+	}
+	return ""
+}
+
+// formatAmount converts a uint64 ngonka amount to a human-friendly string.
+// 1 GONKA = 1e9 ngonka (cosmos convention). Used by `collateral show`.
+func formatAmount(amt uint64, denom string) string {
+	if denom == "ngonka" && amt >= 1_000_000 {
+		gonka := float64(amt) / 1e9
+		return fmt.Sprintf("%d %s (~%g GONKA)", amt, denom, gonka)
+	}
+	return strconv.FormatUint(amt, 10) + " " + denom
 }
 
 func loadStateForCollateral() (*config.State, error) {

@@ -3,7 +3,9 @@ package chain
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os/exec"
 	"regexp"
 	"strconv"
 )
@@ -30,11 +32,17 @@ func GetCollateral(ctx context.Context, qr QueryRunner, participant string) (*Co
 		participant, "--node", "http://node:26657", "-o", "json")
 	if err != nil {
 		// "NotFound" is expected for fresh participants; the binary writes it
-		// to stderr and exits non-zero. Distinguish from real failures.
-		if isCollateralNotFound(err.Error()) || isCollateralNotFound(string(out)) {
+		// to stderr and exits non-zero. cmd.Output() (used by the query runner)
+		// stashes stderr in *exec.ExitError.Stderr.
+		stderr := string(out)
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			stderr = string(exitErr.Stderr)
+		}
+		if isCollateralNotFound(stderr) || isCollateralNotFound(err.Error()) || isCollateralNotFound(string(out)) {
 			return &CollateralBalance{Participant: participant, Found: false, Denom: "ngonka"}, nil
 		}
-		return nil, fmt.Errorf("query collateral: %w (output: %s)", err, string(out))
+		return nil, fmt.Errorf("query collateral: %w\nstderr: %s\nstdout: %s", err, stderr, string(out))
 	}
 	return parseCollateralResponse(out, participant)
 }
