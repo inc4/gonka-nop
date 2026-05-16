@@ -132,8 +132,15 @@ func (p *GPUDetection) Run(ctx context.Context, state *config.State) error {
 
 	ui.Success("Configuration optimized for %d GPUs", len(gpus))
 
-	// Prompt for custom MLNode image override (skip if already set via --mlnode-image flag)
-	if state.CustomMLNodeImage == "" {
+	// Prompt for custom MLNode image override (skip if already set via --mlnode-image
+	// flag OR if we're in non-interactive --yes mode where the operator has signalled
+	// they want defaults). Without this guard the prompt errors out under --yes.
+	switch {
+	case state.CustomMLNodeImage != "":
+		ui.Info("Using custom MLNode image (from --mlnode-image): %s", state.CustomMLNodeImage)
+	case ui.IsNonInteractive():
+		ui.Info("Non-interactive mode: using auto-selected MLNode image (%s)", state.MLNodeImageTag)
+	default:
 		customImage, err := ui.Input(
 			"Custom MLNode image (leave empty for default)",
 			"",
@@ -145,8 +152,15 @@ func (p *GPUDetection) Run(ctx context.Context, state *config.State) error {
 			state.CustomMLNodeImage = customImage
 			ui.Info("Using custom MLNode image: %s", customImage)
 		}
-	} else {
-		ui.Info("Using custom MLNode image (from --mlnode-image): %s", state.CustomMLNodeImage)
+	}
+
+	// Attention-backend selection: skip prompt in non-interactive mode unless
+	// the operator explicitly passed --attention-backend (handled upstream by
+	// setupOverrides registering the override).
+	if ui.IsNonInteractive() && state.AttentionBackend == "" {
+		state.AttentionBackend = "FLASHINFER"
+		ui.Info("Non-interactive mode: using default attention backend FLASHINFER")
+		return nil
 	}
 
 	// Prompt for attention backend selection
