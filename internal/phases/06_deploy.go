@@ -17,8 +17,6 @@ const (
 	pullTimeout        = 30 * time.Minute
 	syncStartupTimeout = 90 * time.Second
 	syncPollInterval   = 5 * time.Second
-	cmdSudo            = "sudo"
-	cmdDocker          = "docker"
 )
 
 // Deploy starts the Docker containers with security hardening

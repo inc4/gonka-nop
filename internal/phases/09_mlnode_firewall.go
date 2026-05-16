@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/inc4/gonka-nop/internal/config"
+	"github.com/inc4/gonka-nop/internal/docker"
 	"github.com/inc4/gonka-nop/internal/ui"
 )
 
@@ -122,7 +123,7 @@ func (p *MLNodeFirewall) Run(_ context.Context, state *config.State) error {
 func runIPTables(useSudo bool, args ...string) error {
 	var cmd *exec.Cmd
 	if useSudo {
-		cmd = exec.Command(cmdSudo, append([]string{"iptables"}, args...)...)
+		cmd = exec.Command(docker.CmdSudo, append([]string{"iptables"}, args...)...)
 	} else {
 		cmd = exec.Command("iptables", args...)
 	}
@@ -141,7 +142,7 @@ func persistIPTables(useSudo bool) error {
 	args := []string{"netfilter-persistent", "save"}
 	var cmd *exec.Cmd
 	if useSudo {
-		cmd = exec.Command(cmdSudo, args...)
+		cmd = exec.Command(docker.CmdSudo, args...)
 	} else {
 		cmd = exec.Command(args[0], args[1:]...)
 	}
@@ -156,7 +157,7 @@ func persistIPTables(useSudo bool) error {
 
 	saveCmd := "iptables-save > /etc/iptables/rules.v4"
 	if useSudo {
-		cmd = exec.Command(cmdSudo, "sh", "-c", saveCmd)
+		cmd = exec.Command(docker.CmdSudo, "sh", "-c", saveCmd)
 	} else {
 		cmd = exec.Command("sh", "-c", saveCmd)
 	}
@@ -169,7 +170,7 @@ func persistIPTables(useSudo bool) error {
 	writeCmd := fmt.Sprintf("printf '#!/bin/sh\\niptables-restore < /etc/iptables/rules.v4\\n' > %s && chmod +x %s",
 		hookPath, hookPath)
 	if useSudo {
-		cmd = exec.Command(cmdSudo, "sh", "-c", writeCmd)
+		cmd = exec.Command(docker.CmdSudo, "sh", "-c", writeCmd)
 	} else {
 		cmd = exec.Command("sh", "-c", writeCmd)
 	}
