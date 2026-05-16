@@ -23,8 +23,25 @@ type NodeStatus struct {
 	Security   SecurityStatus
 	NodeConfig NodeConfigStatus
 
+	// GovernanceModels is the per-governance-model opt-in state for this
+	// node's cold key, fetched by the cmd layer (which can import chain)
+	// and assigned before Display(). When nil/empty, the Governance Models
+	// section is OMITTED from the rendered output entirely (architect
+	// condition #10 — not even an empty header is shown).
+	GovernanceModels []GovModelState
+
 	// Raw data from setup/report for display
 	SetupReport *SetupReport
+}
+
+// GovModelState mirrors chain.PoCDelegationState locally so the status
+// package stays independent of internal/chain. Populated by cmd/root.go's
+// runStatus before invoking Display.
+type GovModelState struct {
+	ModelID    string
+	Delegate   string // delegatee address; empty when not delegated
+	Refused    bool
+	IntentOnly bool
 }
 
 // OverviewStatus holds general node status

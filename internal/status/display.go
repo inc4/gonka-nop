@@ -26,6 +26,31 @@ func Display(s *NodeStatus) {
 	printMLNode(s)
 	printNodeConfig(s)
 	printSecurity(s)
+	printGovernanceModels(s)
+}
+
+// printGovernanceModels appends a per-model PoC opt-in section. OMITTED
+// entirely (no header) when the chain returned zero governance state for
+// this participant — operators who haven't touched governance see no
+// noise. Architect condition #10.
+func printGovernanceModels(s *NodeStatus) {
+	if len(s.GovernanceModels) == 0 {
+		return
+	}
+	printSection("Governance Models")
+	for _, m := range s.GovernanceModels {
+		switch {
+		case m.Refused:
+			_, _ = yellow.Printf("  %s → REFUSED\n", m.ModelID)
+		case m.IntentOnly:
+			_, _ = dimmed.Printf("  %s → intent (bootstrap signal only)\n", m.ModelID)
+		case m.Delegate != "":
+			fmt.Printf("  %s → delegated to %s\n", m.ModelID, m.Delegate)
+		default:
+			// Empty fields — chain returned an entry but no recognized action.
+			_, _ = dimmed.Printf("  %s → (unknown state)\n", m.ModelID)
+		}
+	}
 }
 
 func printHeader(title string) {

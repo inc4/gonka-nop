@@ -1,10 +1,13 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/fatih/color"
+	"github.com/inc4/gonka-nop/internal/chain"
 	"github.com/inc4/gonka-nop/internal/config"
 	"github.com/inc4/gonka-nop/internal/status"
 	"github.com/spf13/cobra"
@@ -139,10 +142,42 @@ func runStatus(_ *cobra.Command, _ []string) error {
 		if err != nil {
 			return fmt.Errorf("failed to fetch status: %w", err)
 		}
+
+		// M11: enrich with per-governance-model state from the chain.
+		// Failure here is non-fatal — display falls back gracefully (the
+		// Governance Models section is OMITTED when GovernanceModels is empty).
+		if state, _ := config.Load(outputDir); state != nil && state.ColdKeyAddress != "" {
+			if gms := fetchGovernanceModelsForStatus(state); gms != nil {
+				nodeStatus.GovernanceModels = gms
+			}
+		}
 	}
 
 	status.Display(nodeStatus)
 	return nil
+}
+
+// fetchGovernanceModelsForStatus is best-effort: any chain query failure
+// returns nil so the Display layer cleanly OMITS the section. Defined in
+// cmd/ (not status/) to keep status independent of internal/chain.
+func fetchGovernanceModelsForStatus(state *config.State) []status.GovModelState {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	qr := chain.QueryRunnerFromState(state)
+	chainStates, err := chain.ListPoCDelegations(ctx, qr, state.ColdKeyAddress)
+	if err != nil || len(chainStates) == 0 {
+		return nil
+	}
+	out := make([]status.GovModelState, 0, len(chainStates))
+	for _, s := range chainStates {
+		out = append(out, status.GovModelState{
+			ModelID:    s.ModelID,
+			Delegate:   s.Delegate,
+			Refused:    s.Refused,
+			IntentOnly: s.IntentOnly,
+		})
+	}
+	return out
 }
 
 // --- Reset Command ---
