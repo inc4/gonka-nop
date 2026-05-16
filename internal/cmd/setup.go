@@ -31,6 +31,7 @@ var (
 	flagNetworkNodeURL   string
 	flagMLNodeImage      string
 	flagAttentionBackend string
+	flagSelectedModel    string
 )
 
 var setupCmd = &cobra.Command{
@@ -86,6 +87,7 @@ func init() {
 	setupCmd.Flags().StringVar(&flagNetworkNodeURL, "network-node-url", "", "Network node Admin API URL (for mlnode-only)")
 	setupCmd.Flags().StringVar(&flagMLNodeImage, "mlnode-image", "", "Custom MLNode Docker image (e.g., ghcr.io/segovchik/gonka-b300-image:3.0.13-b300-tp1)")
 	setupCmd.Flags().StringVar(&flagAttentionBackend, "attention-backend", "", "vLLM attention backend (FLASHINFER or FLASH_ATTN)")
+	setupCmd.Flags().StringVar(&flagSelectedModel, "model", "", "Governance-approved model ID to deploy (e.g. moonshotai/Kimi-K2.6); rejects mismatched GPU architectures before any files are written")
 }
 
 // setupOverrides maps CLI flag values to ui prompt overrides.
@@ -159,6 +161,14 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 	// Set attention backend if provided (overrides auto-detection)
 	if flagAttentionBackend != "" {
 		state.AttentionBackend = flagAttentionBackend
+	}
+
+	// Set selected model if provided; phase 02 (GPU detection) honors this
+	// and passes it to recommendConfig as requestedModel for arch validation.
+	// Mismatched arch/VRAM → phase 02 returns error before any files are
+	// written (AC-M11-2 / UC-1-E2 fast-fail contract).
+	if flagSelectedModel != "" {
+		state.SelectedModel = flagSelectedModel
 	}
 
 	ui.Header("Gonka Node Setup")

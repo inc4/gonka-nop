@@ -90,7 +90,13 @@ func (p *GPUDetection) Run(ctx context.Context, state *config.State) error {
 	}
 	state.TPSize = rec.TP
 	state.PPSize = rec.PP
-	state.SelectedModel = rec.Model
+	// Preserve pre-set SelectedModel (from --model flag or saved state) so
+	// the operator's choice survives phase 02 (Review Notes F5). When the
+	// flag was passed, recommendConfig already validated arch/VRAM and rec.Model
+	// equals state.SelectedModel; this guard makes the no-op explicit.
+	if state.SelectedModel == "" {
+		state.SelectedModel = rec.Model
+	}
 	state.GPUMemoryUtil = rec.MemoryUtil
 	state.MaxModelLen = rec.MaxModelLen
 	state.KVCacheDtype = rec.KVCacheDtype
