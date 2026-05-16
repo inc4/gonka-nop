@@ -154,8 +154,10 @@ func DeriveSyncStatus(rpc *TendermintStatus, peers int, logs DockerLogsTail, stu
 }
 
 // parseSyncFromLogs scans `out` for the most informative state-sync /
-// block-sync line and updates `s` in place.
+// block-sync line and updates `s` in place. CometBFT writes colorized logs
+// by default (e.g. `chunk=\x1b[0m309`), so strip ANSI before regex matching.
 func parseSyncFromLogs(s *SyncStatus, out string) {
+	out = stripANSI(out)
 	lines := strings.Split(out, "\n")
 	// Walk from newest to oldest, prefer the most specific signal.
 	var lastApplied []string
