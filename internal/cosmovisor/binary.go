@@ -9,6 +9,7 @@ import (
 	"archive/zip"
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -86,10 +87,25 @@ func DownloadAsset(ctx context.Context, asset ReleaseAsset) (string, error) {
 }
 
 // VerifySHA256 verifies a file's SHA-256 hash matches the expected value.
-// NOTE (M11 Slice 1): moved verbatim from cmd/repair.go. Slice 5 will replace
-// the string comparison with `crypto/subtle.ConstantTimeCompare` over the
-// hex-decoded byte slices (F8 fix in plan-m11.md Review Notes).
+//
+// Uses crypto/subtle.ConstantTimeCompare over hex-decoded byte slices to
+// avoid leaking comparison-time differences to an attacker who can race the
+// installer against a download. The marginal practical risk is low for a
+// 256-bit digest, but the project's security rules mandate constant-time
+// comparison for sensitive strings (.claude/rules/security.md).
+//
+// If `expected` is not a valid 64-char hex string, returns an error before
+// reading the file so attackers can't probe filesystem state with malformed
+// manifests.
 func VerifySHA256(filePath, expected string) error {
+	expectedBytes, err := hex.DecodeString(expected)
+	if err != nil {
+		return fmt.Errorf("invalid expected sha256 (must be hex): %w", err)
+	}
+	if len(expectedBytes) != sha256.Size {
+		return fmt.Errorf("invalid expected sha256 length: got %d bytes, want %d", len(expectedBytes), sha256.Size)
+	}
+
 	f, err := os.Open(filePath) // #nosec G304 - trusted path from our temp file
 	if err != nil {
 		return fmt.Errorf("open file: %w", err)
@@ -101,9 +117,9 @@ func VerifySHA256(filePath, expected string) error {
 		return fmt.Errorf("hash file: %w", err)
 	}
 
-	actual := hex.EncodeToString(h.Sum(nil))
-	if actual != expected {
-		return fmt.Errorf("sha256 mismatch: expected %s, got %s", expected, actual)
+	actual := h.Sum(nil)
+	if subtle.ConstantTimeCompare(actual, expectedBytes) != 1 {
+		return fmt.Errorf("sha256 mismatch: expected %s, got %s", expected, hex.EncodeToString(actual))
 	}
 	return nil
 }
