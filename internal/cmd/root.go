@@ -144,18 +144,38 @@ func runStatus(_ *cobra.Command, _ []string) error {
 			return fmt.Errorf("failed to fetch status: %w", err)
 		}
 
-		// M11: enrich with per-governance-model state from the chain.
-		// Failure here is non-fatal — display falls back gracefully (the
-		// Governance Models section is OMITTED when GovernanceModels is empty).
+		// M11: enrich with per-governance-model state + collateral balance
+		// from the chain. Failure non-fatal — both sections gracefully omit
+		// when the corresponding field is nil/empty.
 		if state, _ := config.Load(outputDir); state != nil && state.ColdKeyAddress != "" {
 			if gms := fetchGovernanceModelsForStatus(state); gms != nil {
 				nodeStatus.GovernanceModels = gms
+			}
+			if col := fetchCollateralForStatus(state); col != nil {
+				nodeStatus.Collateral = col
 			}
 		}
 	}
 
 	status.Display(nodeStatus)
 	return nil
+}
+
+// fetchCollateralForStatus is best-effort: any chain query failure
+// returns nil so the Display layer cleanly OMITS the section.
+func fetchCollateralForStatus(state *config.State) *status.CollateralInfo {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	qr := chain.QueryRunnerFromState(state)
+	bal, err := chain.GetCollateral(ctx, qr, state.ColdKeyAddress)
+	if err != nil {
+		return nil
+	}
+	return &status.CollateralInfo{
+		Amount: bal.Amount,
+		Denom:  bal.Denom,
+		Found:  bal.Found,
+	}
 }
 
 // fetchGovernanceModelsForStatus is best-effort: any chain query failure

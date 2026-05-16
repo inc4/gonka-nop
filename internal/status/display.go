@@ -27,7 +27,28 @@ func Display(s *NodeStatus) {
 	printMLNode(s)
 	printNodeConfig(s)
 	printSecurity(s)
+	printCollateral(s)
 	printGovernanceModels(s)
+}
+
+// printCollateral renders the participant's on-chain collateral balance.
+// Omitted when s.Collateral is nil (not fetched). Always shown otherwise —
+// even "no collateral" is useful information for a fresh participant.
+func printCollateral(s *NodeStatus) {
+	if s.Collateral == nil {
+		return
+	}
+	printSection("Collateral")
+	c := s.Collateral
+	if !c.Found {
+		printWarn("None deposited — `gonka-nop collateral deposit <amount>` to enable PoC eligibility")
+		return
+	}
+	if c.Denom == "ngonka" && c.Amount > 0 {
+		printOK("%d %s (%.6f GONKA)", c.Amount, c.Denom, float64(c.Amount)/1e9)
+	} else {
+		printOK("%d %s", c.Amount, c.Denom)
+	}
 }
 
 // printSync renders the state-sync / block-sync diagnostic section. Always

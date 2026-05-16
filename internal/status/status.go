@@ -29,6 +29,11 @@ type NodeStatus struct {
 	// See sync.go.
 	Sync *SyncStatus
 
+	// Collateral is the participant's on-chain collateral balance. Populated
+	// by the cmd layer (it has access to internal/chain). nil = not fetched
+	// or query failed; section is omitted when nil.
+	Collateral *CollateralInfo
+
 	// GovernanceModels is the per-governance-model opt-in state for this
 	// node's cold key, fetched by the cmd layer (which can import chain)
 	// and assigned before Display(). When nil/empty, the Governance Models
@@ -48,6 +53,14 @@ type GovModelState struct {
 	Delegate   string // delegatee address; empty when not delegated
 	Refused    bool
 	IntentOnly bool
+}
+
+// CollateralInfo mirrors chain.CollateralBalance locally so the status
+// package stays independent of internal/chain.
+type CollateralInfo struct {
+	Amount uint64 // ngonka
+	Denom  string
+	Found  bool // false when chain returned NotFound (fresh participant)
 }
 
 // OverviewStatus holds general node status
