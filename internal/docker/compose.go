@@ -116,12 +116,28 @@ func (c *ComposeClient) Pull(ctx context.Context) error {
 	return c.run(ctx, "pull")
 }
 
+// PullService runs `docker compose pull <service>` for a single service.
+func (c *ComposeClient) PullService(ctx context.Context, service string) error {
+	return c.run(ctx, "pull", service)
+}
+
 // Up starts services (docker compose up -d [services...]).
 func (c *ComposeClient) Up(ctx context.Context, services ...string) error {
 	args := make([]string, 0, 2+len(services))
 	args = append(args, "up", "-d")
 	args = append(args, services...)
 	return c.run(ctx, args...)
+}
+
+// RecreateService runs `docker compose up -d --no-deps --force-recreate <service>`.
+// Used by M12 `update --service api --image` (Slice 7) to swap an image
+// without touching any depends_on services. Returns an error if service
+// is empty (defensive: empty would recreate ALL services).
+func (c *ComposeClient) RecreateService(ctx context.Context, service string) error {
+	if service == "" {
+		return fmt.Errorf("RecreateService: service name required")
+	}
+	return c.run(ctx, "up", "-d", "--no-deps", "--force-recreate", service)
 }
 
 // Down stops services.
