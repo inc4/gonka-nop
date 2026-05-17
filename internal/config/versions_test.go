@@ -47,6 +47,10 @@ const testComposeContent = `services:
     container_name: proxy-ssl
     image: ghcr.io/product-science/proxy-ssl:0.2.9-post3
 
+  versiond:
+    container_name: versiond
+    image: ghcr.io/product-science/versiond:0.2.9-post3
+
   explorer:
     container_name: explorer
     image: ghcr.io/product-science/explorer:latest
@@ -123,6 +127,8 @@ func TestParseComposeImageVersions_TestnetFormat(t *testing.T) {
     image: ghcr.io/product-science/proxy:0.2.9-post2
   proxy-ssl:
     image: ghcr.io/product-science/proxy-ssl:0.2.9-post2
+  versiond:
+    image: ghcr.io/product-science/versiond:0.2.10-pre-release
   explorer:
     image: ghcr.io/product-science/explorer:latest
 `
@@ -282,5 +288,176 @@ func TestExtractBridgeTag_WithoutDigest(t *testing.T) {
 	tag := extractBridgeTag(content)
 	if tag != "0.2.10-pre-release" {
 		t.Errorf("bridge tag = %q, want 0.2.10-pre-release", tag)
+	}
+}
+
+// --- M12 Slice 1 (TDD red phase) ----------------------------------------------
+// The following 4 tests cover M12 Slice 1: adding a `Versiond` field to the
+// ImageVersions struct and parsing the new `versiond` service from upstream
+// docker-compose.yml. These tests are written BEFORE the production change so
+// they must fail (compile error initially: ImageVersions.Versiond doesn't
+// exist; once added, runtime assertions take over).
+//
+// References:
+//   - docs/plan-m12.md, Slice 1 "Required tests"
+//   - docs/qa/m12-devshardd_test_cases.md TC-1.1, TC-COMPOSE-3, TC-4.9
+
+// testComposeWithVersiond is a minimal but valid compose fixture that includes
+// the new `versiond` service alongside the existing critical services
+// (`inferenced`, `api`). Used by both the happy-path Versiond parse test and
+// the proxy/proxy-ssl disambiguation test (extended with both proxy variants).
+const testComposeWithVersiond = `services:
+  node:
+    container_name: node
+    image: ghcr.io/product-science/inferenced:0.2.12
+    command: ["sh", "./init-docker.sh"]
+
+  api:
+    container_name: api
+    image: ghcr.io/product-science/api:0.2.12
+
+  versiond:
+    container_name: versiond
+    image: ghcr.io/product-science/versiond:v0.2.12
+    restart: unless-stopped
+`
+
+// Test 1: TestParseComposeImageVersions_Versiond verifies the parser picks up
+// the new `versiond` service image tag from a compose file. Currently the
+// ImageVersions struct has no Versiond field, so this is a compile-time red.
+func TestParseComposeImageVersions_Versiond(t *testing.T) {
+	v, err := ParseComposeImageVersions(testComposeWithVersiond, "")
+	if err != nil {
+		t.Fatalf("ParseComposeImageVersions() error: %v", err)
+	}
+
+	if v.Versiond != "v0.2.12" {
+		t.Errorf("Versiond = %q, want %q", v.Versiond, "v0.2.12")
+	}
+}
+
+// Test 2: TestFallback_VersiondPopulated guards the contract that both
+// fallback constructors include a non-empty Versiond tag, so that offline
+// installs (GitHub unreachable) still have a usable default.
+func TestFallback_VersiondPopulated(t *testing.T) {
+	t.Run("mainnet", func(t *testing.T) {
+		v := FallbackMainnetVersions()
+		if v.Versiond == "" {
+			t.Errorf("FallbackMainnetVersions().Versiond is empty; want non-empty default")
+		}
+	})
+
+	t.Run("testnet", func(t *testing.T) {
+		v := FallbackTestnetVersions()
+		if v.Versiond == "" {
+			t.Errorf("FallbackTestnetVersions().Versiond is empty; want non-empty default")
+		}
+	})
+}
+
+// Test 3: TestFetchImageVersions_VersiondMissingErrors verifies that when an
+// upstream compose file lacks the `versiond` service, FetchImageVersions
+// returns a non-nil error referencing "versiond" AND falls back to populated
+// defaults (which Test 2 guarantees have a Versiond tag).
+//
+// NOTE: To make this pass, the critical-field check in ParseComposeImageVersions
+// (versions.go line 151) must be extended to include Versiond. That production
+// change is part of M12 Slice 1, not this test.
+//
+// Pattern mirrors TestFetchImageVersions_FallbackOnError: we cannot inject a
+// custom URL (FetchImageVersions uses hardcoded GitHub URLs), so we drive the
+// negative path through the public API and tolerate the case where GitHub is
+// actually reachable AND returns a compose without versiond. We spin up an
+// httptest server primarily to confirm a reproducible mock pattern exists for
+// future maintainers; the assertions run on the real FetchImageVersions return.
+func TestFetchImageVersions_VersiondMissingErrors(t *testing.T) {
+	// Mock server: serves a compose without versiond, plus an mlnode file.
+	// Kept for documentation; FetchImageVersions hardcodes GitHub URLs so this
+	// server is not actually hit. Future refactors could inject the base URL.
+	composeNoVersiond := `services:
+  node:
+    image: ghcr.io/product-science/inferenced:0.2.12
+  api:
+    image: ghcr.io/product-science/api:0.2.12
+`
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		switch {
+		case strings.HasSuffix(path, "docker-compose.yml"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(composeNoVersiond))
+		case strings.HasSuffix(path, "docker-compose.mlnode.yml"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(testMLNodeContent))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	// First-line assertion: parser must reject a compose missing `versiond`
+	// directly (independent of FetchImageVersions network behavior).
+	if _, parseErr := ParseComposeImageVersions(composeNoVersiond, testMLNodeContent); parseErr == nil {
+		t.Errorf("ParseComposeImageVersions() with no versiond returned nil error; want error mentioning 'versiond'")
+	} else if !strings.Contains(strings.ToLower(parseErr.Error()), "versiond") {
+		t.Errorf("ParseComposeImageVersions() error = %q; want substring 'versiond' (case-insensitive)", parseErr.Error())
+	}
+
+	// Second assertion: when FetchImageVersions fails (any reason — bad parse,
+	// network), the returned ImageVersions must have a populated Versiond from
+	// the fallback path. This couples Test 2's contract to the fetch surface.
+	ctx := context.Background()
+	v, err := FetchImageVersions(ctx, false)
+	if err != nil {
+		// Error path (most common in CI): we should get fallback versions
+		// with Versiond populated.
+		if v.Source != testSourceFB {
+			t.Errorf("on FetchImageVersions error, Source = %q; want %q", v.Source, testSourceFB)
+		}
+		if v.Versiond == "" {
+			t.Errorf("on FetchImageVersions error, Versiond is empty; fallback must populate Versiond")
+		}
+		return
+	}
+
+	// Success path: GitHub was reachable AND returned a compose with versiond
+	// already in upstream. Accept and verify the field is populated end-to-end.
+	if v.Versiond == "" {
+		t.Errorf("FetchImageVersions succeeded but Versiond is empty; upstream compose must declare versiond")
+	}
+}
+
+// Test 4: TestParseComposeImageVersions_ProxySSLDisambiguation drives the
+// higher-level ParseComposeImageVersions API (not just extractImageTag) to
+// confirm that when both `proxy` and `proxy-ssl` services are present with
+// distinct tags, neither gets crossed with the other. Complements the
+// lower-level TestExtractImageTag_ProxyVsProxySSL with an end-to-end check.
+func TestParseComposeImageVersions_ProxySSLDisambiguation(t *testing.T) {
+	const compose = `services:
+  node:
+    image: ghcr.io/product-science/inferenced:0.2.12
+  api:
+    image: ghcr.io/product-science/api:0.2.12
+  versiond:
+    image: ghcr.io/product-science/versiond:v0.2.12
+  proxy:
+    container_name: proxy
+    image: ghcr.io/product-science/proxy:v0.2.12
+  proxy-ssl:
+    container_name: proxy-ssl
+    image: ghcr.io/product-science/proxy-ssl:v0.2.13
+`
+	v, err := ParseComposeImageVersions(compose, "")
+	if err != nil {
+		t.Fatalf("ParseComposeImageVersions() error: %v", err)
+	}
+
+	if v.Proxy != "v0.2.12" {
+		t.Errorf("Proxy = %q, want %q", v.Proxy, "v0.2.12")
+	}
+	if v.ProxySSL != "v0.2.13" {
+		t.Errorf("ProxySSL = %q, want %q", v.ProxySSL, "v0.2.13")
 	}
 }
