@@ -67,6 +67,7 @@ func init() {
 	rootCmd.AddCommand(downloadModelCmd)
 	rootCmd.AddCommand(govmodelCmd)
 	rootCmd.AddCommand(collateralCmd)
+	rootCmd.AddCommand(repairPermissionsCmd)
 }
 
 // Execute runs the root command
