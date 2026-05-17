@@ -89,6 +89,14 @@ func (p *ConfigGeneration) Run(_ context.Context, state *config.State) error {
 	}
 	ui.Detail("Created: %s/docker-compose.yml", state.OutputDir)
 
+	// M12: create devshards/{bin,data} directories required by versiond bind mounts.
+	if err := ui.WithSpinner("Creating devshards/{bin,data} directories", func() error {
+		return ensureDevshardsDirs(state.OutputDir)
+	}); err != nil {
+		return err
+	}
+	ui.Detail("Ready: %s/devshards/{bin,data}", state.OutputDir)
+
 	// Generate mlnode-related configs (skip for network-only topology)
 	if !state.IsNetworkOnly() {
 		// Generate nginx.conf for mlnode proxy
@@ -445,6 +453,31 @@ RPC_SERVER_URL_2=%s
 	)
 
 	return os.WriteFile(filepath.Join(state.OutputDir, "config.env"), []byte(content), 0600)
+}
+
+// ensureDevshardsDirs creates devshards/{bin,data} under outputDir with
+// mode 0750. Idempotent: pre-existing dirs are left untouched (mode
+// preserved per UC-1-A3 — the operator may have intentionally set 0700
+// or pointed data at a symlink to a big-disk mount per UC-1-EDGE3).
+//
+// Required because versiond mounts these as bind volumes; Docker would
+// otherwise create them as root-owned, breaking the operator's ability
+// to inspect contents.
+func ensureDevshardsDirs(outputDir string) error {
+	for _, sub := range []string{"bin", "data"} {
+		dir := filepath.Join(outputDir, "devshards", sub)
+		// os.Stat first so we can leave pre-existing untouched.
+		if info, err := os.Stat(dir); err == nil {
+			if !info.IsDir() {
+				return fmt.Errorf("%s exists but is not a directory", dir)
+			}
+			continue // already there — no-op
+		}
+		if err := os.MkdirAll(dir, 0750); err != nil {
+			return fmt.Errorf("create %s: %w", dir, err)
+		}
+	}
+	return nil
 }
 
 // renderPostgresEnv produces the optional Postgres devshardd backend

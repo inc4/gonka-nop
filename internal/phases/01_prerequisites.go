@@ -100,8 +100,38 @@ func (p *Prerequisites) Run(ctx context.Context, state *config.State) error {
 	p.checkStorageLayout(ctx, state)
 	p.checkPorts(state)
 
+	// M12 FR-M12-12: non-fatal versiond image pullability check.
+	// migrate-devshardd (Slice 6) runs its own FATAL pull check.
+	p.checkVersiondPullable(ctx, state)
+
 	ui.Success("All prerequisites satisfied")
 	return nil
+}
+
+// checkVersiondPullable warns (non-fatal) if the versiond image cannot
+// be pulled. Slice 6 migrate-devshardd runs a stricter check that
+// treats failure as fatal.
+func (p *Prerequisites) checkVersiondPullable(ctx context.Context, state *config.State) {
+	if p.mocked {
+		ui.Detail("Versiond image: pullable (mocked)")
+		return
+	}
+	tag := state.Versions.Versiond
+	if tag == "" {
+		tag = "0.2.12"
+	}
+	image := "ghcr.io/product-science/versiond:" + tag
+	pullCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(pullCtx, "docker", "pull", "--quiet", image) // #nosec G204 - image built from validated state version
+	if state.UseSudo {
+		cmd = exec.CommandContext(pullCtx, "sudo", "docker", "pull", "--quiet", image) // #nosec G204 - same
+	}
+	if err := cmd.Run(); err != nil {
+		ui.Warn("Could not pull versiond image %s: %v (migrate-devshardd will retry)", image, err)
+		return
+	}
+	ui.Detail("Versiond image: %s pullable", image)
 }
 
 func (p *Prerequisites) detectDistro(state *config.State) error {
@@ -615,6 +645,7 @@ func (p *Prerequisites) checkPorts(state *config.State) {
 			{5000, "P2P"}, {8000, "API"}, {26657, "RPC"},
 			{5050, "ML Inference"}, {8080, "PoC"},
 			{9100, "API ML Callback"}, {9200, "Admin API"},
+			{9400, "API NodeManager gRPC (devshardd)"}, // M12 UC-1-E4
 		}
 		for _, pt := range ports {
 			ui.Detail("Port %d (%s): available (mocked)", pt.port, pt.name)
@@ -633,6 +664,7 @@ func (p *Prerequisites) checkPorts(state *config.State) {
 		{8080, "PoC"},
 		{9100, "API ML Callback"},
 		{9200, "Admin API"},
+		{9400, "API NodeManager gRPC (devshardd)"}, // M12 UC-1-E4
 	}
 	for _, pt := range ports {
 		addr := fmt.Sprintf(":%d", pt.port)
