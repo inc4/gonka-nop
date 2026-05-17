@@ -135,8 +135,28 @@ type State struct {
 	DiskFreeGB    int    `json:"disk_free_gb,omitempty"`
 	AutoUpdateOff bool   `json:"auto_update_off,omitempty"` // unattended-upgrades disabled
 
+	// Devshardd / versiond payload-storage configuration (M12).
+	// Empty PostgresHost selects the file storage backend (default).
+	// Non-empty PostgresHost opts into Postgres. PostgresPassword MUST
+	// NEVER appear in logs, status output, or telemetry per NFR-M12-1.
+	// State file is 0600 per existing state.Save contract (R-M12-5).
+	// Pre-M12 state.json files load with empty DevshardConfig per
+	// FR-M12-14 backward-compat contract (omitempty tag).
+	DevshardConfig DevshardConfig `json:"devshard_config,omitempty"`
+
 	// Internal
 	statePath string `json:"-"`
+}
+
+// DevshardConfig holds optional Postgres connection params for the
+// devshardd payload-storage backend. All fields optional; empty
+// PostgresHost = file backend (default per UC-1).
+type DevshardConfig struct {
+	PostgresHost     string `json:"postgres_host,omitempty"`
+	PostgresPort     string `json:"postgres_port,omitempty"`
+	PostgresDB       string `json:"postgres_db,omitempty"`
+	PostgresUser     string `json:"postgres_user,omitempty"`
+	PostgresPassword string `json:"postgres_password,omitempty"` // #nosec G101 - field name describes credential storage; value is operator-supplied
 }
 
 // NewState creates a new state with defaults
@@ -270,6 +290,7 @@ func (s *State) Reset() {
 	s.NodeType = ""
 	s.NetworkNodeURL = ""
 	s.NetworkNodeIP = ""
+	s.DevshardConfig = DevshardConfig{}
 }
 
 // EffectiveNodeType returns the node topology type, defaulting to "full"
