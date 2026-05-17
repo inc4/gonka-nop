@@ -23,7 +23,9 @@ type chainBalanceQuerier struct {
 // no on-chain account (treated as not-an-error by callers; GrantMissing
 // will then surface "insufficient balance for grant fee").
 func (c *chainBalanceQuerier) GetBalance(ctx context.Context, address string) (uint64, string, error) {
-	out, err := c.qr.Query(ctx, "query", "bank", "balances", address, "-o", "json")
+	// dockerExecQueryRunner prefixes "docker exec api"; we add the binary name.
+	out, err := c.qr.Query(ctx, "inferenced", "query", "bank", "balances", address,
+		"--node", "http://node:26657", "-o", "json")
 	if err != nil {
 		return 0, "", fmt.Errorf("query bank balances: %w", err)
 	}

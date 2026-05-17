@@ -117,9 +117,12 @@ func TestDiffPermissions_NoCheck_Errors(t *testing.T) {
 
 // --- GrantMissing ---
 
-func TestGrantMissing_HappyPath_BroadcastsExactlyMissing(t *testing.T) {
+func TestGrantMissing_HappyPath_BroadcastsGranterAndGrantee(t *testing.T) {
 	b := &recordingPermBroadcaster{resp: "txhash: ABCD"}
 	bal := validBalance()
+	// Chain CLI signature is <granter-key-name> <grantee-address>; the
+	// list of missing permissions is informational only (used to gate
+	// the call and log; chain re-grants the full ml-ops set).
 	missing := []Permission{{Action: "/foo"}, {Action: "/bar"}}
 
 	tx, err := GrantMissing(context.Background(), b, bal,
@@ -136,9 +139,9 @@ func TestGrantMissing_HappyPath_BroadcastsExactlyMissing(t *testing.T) {
 	if b.lastAct != grantAction {
 		t.Errorf("action = %q, want %q", b.lastAct, grantAction)
 	}
-	wantArgs := []string{"gonka1grantee", "/foo", "/bar"}
+	wantArgs := []string{"cold", "gonka1grantee"}
 	if !equalSlices(b.lastArgs, wantArgs) {
-		t.Errorf("args = %v, want %v", b.lastArgs, wantArgs)
+		t.Errorf("args = %v, want %v (chain CLI takes exactly 2 positional args)", b.lastArgs, wantArgs)
 	}
 }
 

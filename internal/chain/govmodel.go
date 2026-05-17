@@ -56,7 +56,8 @@ func (b *dockerExecTxBroadcaster) BroadcastModule(ctx context.Context, module, s
 	if chainID == "" {
 		chainID = "gonka-mainnet"
 	}
-	innerArgs := []string{"tx", module, action}
+	innerArgs := make([]string, 0, 3+len(args)+15)
+	innerArgs = append(innerArgs, "tx", module, action)
 	innerArgs = append(innerArgs, args...)
 	innerArgs = append(innerArgs,
 		"--from", signerKey,
@@ -64,7 +65,7 @@ func (b *dockerExecTxBroadcaster) BroadcastModule(ctx context.Context, module, s
 		"--keyring-backend", "file",
 		"--keyring-dir", "/root/.inference",
 		"--node", "http://node:26657",
-		"--gas", "200000",
+		"--gas", "2000000",
 		"--fees", "0icoin",
 		"-y",
 	)
@@ -115,7 +116,8 @@ func (b *dockerExecTxBroadcaster) Broadcast(ctx context.Context, signerKey, pass
 		chainID = "gonka-mainnet"
 	}
 	// Build the inferenced tx argv inside the api container.
-	innerArgs := []string{"tx", "inference", action}
+	innerArgs := make([]string, 0, 3+len(args)+15)
+	innerArgs = append(innerArgs, "tx", "inference", action)
 	innerArgs = append(innerArgs, args...)
 	innerArgs = append(innerArgs,
 		"--from", signerKey,
@@ -123,7 +125,7 @@ func (b *dockerExecTxBroadcaster) Broadcast(ctx context.Context, signerKey, pass
 		"--keyring-backend", "file",
 		"--keyring-dir", "/root/.inference",
 		"--node", "http://node:26657",
-		"--gas", "200000",
+		"--gas", "2000000",
 		"--fees", "0icoin",
 		"-y",
 	)

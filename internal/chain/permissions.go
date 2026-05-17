@@ -74,15 +74,21 @@ func DiffPermissions(report *status.SetupReport) ([]Permission, error) {
 	return nil, fmt.Errorf("permissions_granted check not found in setup report")
 }
 
-// GrantMissing broadcasts a single `grant-ml-ops-permissions` tx
-// containing exactly the missing permissions, signed by signerKey
-// (cold key — the grantor) and granting to grantee (warm key address).
+// GrantMissing broadcasts a single `grant-ml-ops-permissions` tx,
+// signed by signerKey (cold key — the grantor) and granting to grantee
+// (warm key address).
+//
+// IMPORTANT: the chain's `grant-ml-ops-permissions` CLI takes exactly
+// two positional args (granter-key-name, grantee-address) and grants
+// the FULL ml-ops permission set — the chain handles the delta against
+// existing grants (re-granting is idempotent at the chain level). The
+// `missing` slice from DiffPermissions is used only as a precondition
+// gate (skip the call when empty) and for the operator-visible log.
 //
 // Pre-checks signerAddress balance >= estimatedFee. Returns wrapped
 // error if balance insufficient; tx is NOT constructed. All error
 // messages are scrubbed of the password value.
 //
-// `missing` MUST be non-empty (caller checks via DiffPermissions).
 // `action` is hard-coded to grantAction — this function never broadcasts
 // any other tx type. Test TestGrantMissing_NeverConstructsForbiddenAction
 // enforces this invariant across the entire repair flow.
@@ -113,14 +119,9 @@ func GrantMissing(
 			have, denom, estimatedFee, denom, signerAddress)
 	}
 
-	// Build args: <grantee> <perm1> <perm2> ...
-	args := make([]string, 0, 1+len(missing))
-	args = append(args, grantee)
-	for _, p := range missing {
-		args = append(args, p.Action)
-	}
-
-	out, err := broadcaster.Broadcast(ctx, signerKey, password, grantAction, args...)
+	// Chain CLI signature: grant-ml-ops-permissions <granter> <grantee>
+	// `missing` is intentionally NOT passed — CLI grants the full ml-ops set.
+	out, err := broadcaster.Broadcast(ctx, signerKey, password, grantAction, signerKey, grantee)
 	if err != nil {
 		return "", fmt.Errorf("grant-ml-ops-permissions tx failed: %s: %w", redactPassword(out, password), redactPasswordErr(err, password))
 	}
