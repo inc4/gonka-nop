@@ -1,6 +1,6 @@
 module github.com/inc4/gonka-nop
 
-go 1.25.8
+go 1.25.10
 
 require (
 	github.com/AlecAivazis/survey/v2 v2.3.7
@@ -8,6 +8,7 @@ require (
 	github.com/fatih/color v1.16.0
 	github.com/spf13/cobra v1.8.0
 	golang.org/x/sys v0.14.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
