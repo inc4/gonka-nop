@@ -195,8 +195,30 @@ See [`docs/nop-guide.md`](docs/nop-guide.md) for full end-to-end walkthroughs pe
 | `--account-pubkey` | Account public key (secure workflow) | `full`, `network` |
 | `--mlnode-image` | Custom MLNode Docker image (overrides auto-detection) | `full`, `mlnode` |
 | `--attention-backend` | vLLM attention backend: `FLASHINFER` or `FLASH_ATTN` | `full`, `mlnode` |
+| `--model` | Governance-approved model ID (rejects mismatched GPU arch before any files are written) | `full`, `mlnode` |
 | `-y, --yes` | Non-interactive mode | All |
 | `-o, --output` | Output directory (default: `./gonka-node`) | All |
+
+## Supported Models
+
+NOP auto-recommends a model based on detected GPUs and the chain's governance
+list. In interactive setup it shows the recommendation and offers a picker
+filtered to **only the models your GPU architecture can serve** — pick any
+of those, or accept the recommendation by hitting Enter. Override
+non-interactively with `--model <id>`; NOP rejects mismatches before
+writing any config.
+
+| Model ID | Min VRAM/GPU | Min Total VRAM | GPU arch | Image variant |
+|---|---|---|---|---|
+| `Qwen/Qwen3-235B-A22B-Instruct-2507-FP8` | 40 GB | 320 GB | any (A100+) | standard |
+| `Qwen/Qwen3-32B-FP8` | 20 GB | 40 GB | any | standard |
+| `Qwen/QwQ-32B` | 20 GB | 80 GB | any | standard |
+| `moonshotai/Kimi-K2.6` | 80 GB | 320 GB | **Blackwell only** (sm_100 / sm_103 / sm_120) | blackwell |
+
+Picking a model your hardware cannot serve (e.g. Kimi on A100) is a hard
+error at setup time. To still earn weight for a model you cannot run, see
+the **per-model governance opt-in** flow in [`docs/nop-guide.md`](docs/nop-guide.md)
+— delegate to a Blackwell host instead of refusing (~5% loss vs ~10%).
 
 ## Manual vs Automated
 

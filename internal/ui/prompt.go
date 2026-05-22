@@ -93,6 +93,61 @@ func Select(message string, options []string) (string, error) {
 	return result, err
 }
 
+// SelectWithDefault prompts the user to select from a list of options with
+// a default highlighted at the top. Behaves like Select() with respect to
+// override resolution (--yes mode looks up an exact / substring-matching
+// override value in the option set) and non-interactive fallback (uses
+// defaultVal if present in options, else first option).
+//
+// When defaultVal is in options, survey highlights it as the preselected
+// entry — the operator can hit Enter to accept.
+func SelectWithDefault(message string, options []string, defaultVal string) (string, error) {
+	if val, ok := findOverride(message); ok {
+		lowerVal := strings.ToLower(val)
+		for _, opt := range options {
+			if strings.Contains(strings.ToLower(opt), lowerVal) {
+				return opt, nil
+			}
+		}
+		for _, opt := range options {
+			if strings.EqualFold(opt, val) {
+				return opt, nil
+			}
+		}
+		return "", fmt.Errorf("override value %q does not match any option: %v", val, options)
+	}
+	if IsNonInteractive() {
+		for _, opt := range options {
+			if opt == defaultVal {
+				return defaultVal, nil
+			}
+		}
+		if len(options) > 0 {
+			return options[0], nil
+		}
+		return "", fmt.Errorf("no options available for prompt: %s", message)
+	}
+
+	defaultExists := false
+	for _, opt := range options {
+		if opt == defaultVal {
+			defaultExists = true
+			break
+		}
+	}
+
+	var result string
+	prompt := &survey.Select{
+		Message: message,
+		Options: options,
+	}
+	if defaultExists {
+		prompt.Default = defaultVal
+	}
+	err := survey.AskOne(prompt, &result)
+	return result, err
+}
+
 // Confirm prompts user for yes/no confirmation
 func Confirm(message string, defaultVal bool) (bool, error) {
 	if IsNonInteractive() {
