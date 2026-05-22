@@ -58,9 +58,17 @@ HuggingFace cache (`HF_HOME`) needs ~220 GB for Qwen3-235B FP8.
 ## Picking a model
 
 NOP auto-recommends a model from the chain's governance-approved list
-based on the detected hardware, and you can override with
-`--model <id>`. NOP rejects mismatched architectures before writing any
-config — no half-deployed state.
+based on the detected hardware.
+
+- **Interactive setup**: after GPU detection, you see the recommendation
+  and a picker. The picker is **filtered by GPU architecture** —
+  Kimi-K2.6 is hidden on A100/H100/H200, visible on Blackwell. Hit
+  Enter to accept the recommendation, or arrow-keys to pick another
+  supported model. Switching models re-runs the recommender so TP/PP
+  and memory settings match the new choice.
+- **Non-interactive (`--yes`)**: override with `--model <id>`. NOP
+  rejects mismatched architectures before writing any config — no
+  half-deployed state.
 
 | Model ID | Min VRAM/GPU | Min Total VRAM | GPU arch | Notes |
 |---|---|---|---|---|
