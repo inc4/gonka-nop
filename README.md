@@ -164,10 +164,21 @@ gonka-nop ml-node list
 | `ml-node status` | Detailed ML node status |
 | `ml-node enable/disable` | Enable or disable an ML node |
 | `ml-node set-image` | Change MLNode Docker image and restart (safe rollout) |
+| `govmodel list` | Show this node's per-model PoC opt-in state |
+| `govmodel candidates <model>` | Rank on-chain hosts running `<model>` for delegation |
+| `govmodel delegate <model> <addr>` | Delegate PoC weight for `<model>` to `<addr>` |
+| `govmodel refuse <model>` | Refuse participation in `<model>`'s PoC |
+| `govmodel declare-intent <model>` | Bootstrap-only signal of intent to run `<model>` |
+| `collateral show [addr]` | Show on-chain collateral balance |
+| `collateral deposit <amount>ngonka` | Deposit collateral to back PoC weight |
+| `collateral withdraw <amount>ngonka` | Withdraw collateral (1-epoch unbonding, still slashable) |
+| `repair-permissions` | Re-grant missing ml-ops permissions to the warm key |
 | `download-model` | Pre-download model weights before setup |
 | `reset` | Stop containers and clean up |
 | `cleanup` | Recover disk space |
 | `version` | Print version info |
+
+See [`docs/nop-guide.md`](docs/nop-guide.md) for full end-to-end walkthroughs per topology, including the post-epoch-180 collateral + governance opt-in flow.
 
 ## Setup Flags
 
