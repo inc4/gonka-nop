@@ -111,15 +111,35 @@ func truncate(s string, n int) string {
 	return s[:n-1] + "…"
 }
 
-// printGovernanceModels appends a per-model PoC opt-in section. OMITTED
-// entirely (no header) when the chain returned zero governance state for
-// this participant — operators who haven't touched governance see no
-// noise. Architect condition #10.
+// printGovernanceModels appends a per-model PoC opt-in section.
+//
+// Display rules (revised 2026-05-22):
+//   - non-empty GovernanceModels: render each entry verbatim
+//   - empty GovernanceModels + non-empty AvailableGovernanceModels:
+//     render an informative "no delegations declared" section that
+//     lists the chain's available models and the `govmodel delegate`
+//     command. Fresh deploys previously had no signal at all that
+//     this command existed.
+//   - both empty: section is OMITTED (residual architect cond #10 —
+//     only when chain has zero governance models)
 func printGovernanceModels(s *NodeStatus) {
-	if len(s.GovernanceModels) == 0 {
+	if len(s.GovernanceModels) == 0 && len(s.AvailableGovernanceModels) == 0 {
 		return
 	}
 	printSection("Governance Models")
+
+	// Fresh-deploy path: participant has not declared any per-model
+	// opt-in yet, but chain has governance models available.
+	if len(s.GovernanceModels) == 0 {
+		printWarn("No delegations declared — this node will not participate in any model's PoC.")
+		fmt.Println("  Available governance models on chain:")
+		for _, modelID := range s.AvailableGovernanceModels {
+			fmt.Printf("    - %s\n", modelID)
+		}
+		fmt.Println("  Declare an opt-in with:  gonka-nop govmodel delegate <model-id>")
+		return
+	}
+
 	for _, m := range s.GovernanceModels {
 		switch {
 		case m.Refused:

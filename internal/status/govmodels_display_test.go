@@ -34,20 +34,61 @@ func captureStdout(t *testing.T, f func()) string {
 	return buf.String()
 }
 
-// TestPrintGovernanceModels_OmittedWhenEmpty verifies architect cond #10:
-// no header, no whitespace when GovernanceModels is nil or empty.
-func TestPrintGovernanceModels_OmittedWhenEmpty(t *testing.T) {
+// TestPrintGovernanceModels_OmittedWhenBothEmpty verifies the residual
+// architect cond #10: when BOTH the participant's delegations AND the
+// chain's available-models list are empty, the section is omitted. Only
+// case where complete silence is appropriate (chain has zero governance
+// models, which is essentially never on a live network).
+func TestPrintGovernanceModels_OmittedWhenBothEmpty(t *testing.T) {
 	out := captureStdout(t, func() {
-		printGovernanceModels(&NodeStatus{GovernanceModels: nil})
+		printGovernanceModels(&NodeStatus{GovernanceModels: nil, AvailableGovernanceModels: nil})
 	})
 	if strings.Contains(out, "Governance Models") {
-		t.Errorf("section header should be omitted when empty; got:\n%s", out)
+		t.Errorf("section header should be omitted when both empty; got:\n%s", out)
 	}
 	out2 := captureStdout(t, func() {
-		printGovernanceModels(&NodeStatus{GovernanceModels: []GovModelState{}})
+		printGovernanceModels(&NodeStatus{GovernanceModels: []GovModelState{}, AvailableGovernanceModels: []string{}})
 	})
 	if strings.Contains(out2, "Governance Models") {
-		t.Errorf("section header should be omitted for empty slice; got:\n%s", out2)
+		t.Errorf("section header should be omitted for both-empty slices; got:\n%s", out2)
+	}
+}
+
+// TestPrintGovernanceModels_ShowsAvailableWhenNoDelegations covers the
+// fresh-deploy case (2026-05-22): when chain has governance models but
+// the participant has no delegations yet, render a section that names
+// the available models AND prints the `govmodel delegate` command so
+// the operator knows what to do next.
+//
+// NOTE: this test only asserts on content emitted via plain fmt.* calls,
+// since the fatih/color helpers (printSection, printWarn) bind to
+// os.Stdout at init time and bypass the captureStdout pipe. The colored
+// section header and warning are exercised by the binary smoke test.
+func TestPrintGovernanceModels_ShowsAvailableWhenNoDelegations(t *testing.T) {
+	orig := color.NoColor
+	color.NoColor = true
+	t.Cleanup(func() { color.NoColor = orig })
+
+	out := captureStdout(t, func() {
+		printGovernanceModels(&NodeStatus{
+			GovernanceModels: nil,
+			AvailableGovernanceModels: []string{
+				"Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
+				"moonshotai/Kimi-K2.6",
+			},
+		})
+	})
+	if !strings.Contains(out, "Available governance models on chain") {
+		t.Errorf("missing 'Available governance models' line: %q", out)
+	}
+	if !strings.Contains(out, "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8") {
+		t.Errorf("missing Qwen model name in available list: %q", out)
+	}
+	if !strings.Contains(out, "moonshotai/Kimi-K2.6") {
+		t.Errorf("missing Kimi model name in available list: %q", out)
+	}
+	if !strings.Contains(out, "gonka-nop govmodel delegate") {
+		t.Errorf("missing delegate command suggestion: %q", out)
 	}
 }
 

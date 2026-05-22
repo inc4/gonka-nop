@@ -36,10 +36,22 @@ type NodeStatus struct {
 
 	// GovernanceModels is the per-governance-model opt-in state for this
 	// node's cold key, fetched by the cmd layer (which can import chain)
-	// and assigned before Display(). When nil/empty, the Governance Models
-	// section is OMITTED from the rendered output entirely (architect
-	// condition #10 — not even an empty header is shown).
+	// and assigned before Display().
+	//
+	// Display rules (revised 2026-05-22):
+	//   - non-empty: render entries verbatim
+	//   - empty + AvailableGovernanceModels non-empty: render an
+	//     informative "no delegations yet" section listing the chain's
+	//     governance models + the `govmodel delegate` command (without
+	//     this, fresh deploys had no hint that the command exists)
+	//   - both empty: section is OMITTED (original architect cond #10 —
+	//     only when chain has zero governance models at all)
 	GovernanceModels []GovModelState
+
+	// AvailableGovernanceModels lists the chain-known governance model IDs
+	// independent of this participant's delegations. Populated by the cmd
+	// layer best-effort. nil = not fetched / query failed.
+	AvailableGovernanceModels []string
 
 	// Raw data from setup/report for display
 	SetupReport *SetupReport

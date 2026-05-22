@@ -62,12 +62,41 @@ var govmodelIntentCmd = &cobra.Command{
 	RunE:  runGovmodelIntent,
 }
 
+var (
+	candidatesHealthyOnly bool
+	candidatesLimit       int
+)
+
+var govmodelCandidatesCmd = &cobra.Command{
+	Use:   "candidates <model-id>",
+	Short: "List on-chain hosts running <model-id>, ranked best-first for delegation",
+	Long: `Query the chain for every participant's hardware_nodes and rank those
+running <model-id> by health. Use to pick a delegatee for
+'gonka-nop govmodel delegate' when you can't run the model locally.
+
+Ranking (best-first):
+  1. More INFERENCE nodes win
+  2. Fewer FAILED nodes win (tiebreaker)
+  3. Bigger fleet wins (tiebreaker)
+
+Examples:
+  gonka-nop govmodel candidates moonshotai/Kimi-K2.6
+  gonka-nop govmodel candidates moonshotai/Kimi-K2.6 --healthy-only --limit 10`,
+	Args: cobra.ExactArgs(1),
+	RunE: runGovmodelCandidates,
+}
+
 func init() {
-	govmodelCmd.AddCommand(govmodelListCmd, govmodelDelegateCmd, govmodelRefuseCmd, govmodelIntentCmd)
+	govmodelCmd.AddCommand(govmodelListCmd, govmodelDelegateCmd, govmodelRefuseCmd, govmodelIntentCmd, govmodelCandidatesCmd)
 
 	for _, c := range []*cobra.Command{govmodelDelegateCmd, govmodelRefuseCmd, govmodelIntentCmd} {
 		c.Flags().BoolVar(&govmodelForce, "force", false, "Skip PoC safety check (dangerous)")
 	}
+
+	govmodelCandidatesCmd.Flags().BoolVar(&candidatesHealthyOnly, "healthy-only", false,
+		"Hide participants with any FAILED nodes for this model")
+	govmodelCandidatesCmd.Flags().IntVar(&candidatesLimit, "limit", 15,
+		"Maximum candidates to show (0 = no limit)")
 }
 
 func runGovmodelList(cmd *cobra.Command, _ []string) error {
@@ -117,6 +146,66 @@ func runGovmodelRefuse(cmd *cobra.Command, args []string) error {
 
 func runGovmodelIntent(cmd *cobra.Command, args []string) error {
 	return runGovmodelTx(cmd.Context(), "declare-intent", "declare-poc-intent", args[0])
+}
+
+func runGovmodelCandidates(cmd *cobra.Command, args []string) error {
+	modelID := args[0]
+	state, err := loadStateForGovmodel()
+	if err != nil {
+		return err
+	}
+	qr := chain.QueryRunnerFromState(state)
+	entries, err := chain.ListHardwareNodesAll(cmd.Context(), qr)
+	if err != nil {
+		return fmt.Errorf("query hardware-nodes-all: %w", err)
+	}
+	cands := chain.RankCandidatesForModel(entries, modelID)
+	if len(cands) == 0 {
+		ui.Warn("No participants on chain are running %q.", modelID)
+		ui.Info("Check available governance models with: gonka-nop status")
+		return nil
+	}
+	if candidatesHealthyOnly {
+		filtered := cands[:0]
+		for _, c := range cands {
+			if c.IsHealthy() {
+				filtered = append(filtered, c)
+			}
+		}
+		cands = filtered
+		if len(cands) == 0 {
+			ui.Warn("No fully-healthy candidates found for %q (all have at least one FAILED node).", modelID)
+			ui.Info("Re-run without --healthy-only to see mixed-health candidates.")
+			return nil
+		}
+	}
+	limit := candidatesLimit
+	if limit > 0 && len(cands) > limit {
+		cands = cands[:limit]
+	}
+
+	ui.Header(fmt.Sprintf("Delegation candidates for %s", modelID))
+	for i, c := range cands {
+		status := "✓"
+		if !c.IsHealthy() {
+			status = "⚠"
+		}
+		fmt.Printf(" %s %2d. %s\n", status, i+1, c.Participant)
+		nodeSummary := fmt.Sprintf("    %d INFERENCE", c.InferenceNodes)
+		if c.FailedNodes > 0 {
+			nodeSummary += fmt.Sprintf(" · %d FAILED", c.FailedNodes)
+		}
+		if c.OtherNodes > 0 {
+			nodeSummary += fmt.Sprintf(" · %d other", c.OtherNodes)
+		}
+		fmt.Println(nodeSummary)
+		if c.Hardware != "" {
+			fmt.Printf("    %s\n", c.Hardware)
+		}
+	}
+	fmt.Println()
+	ui.Info("Delegate with:  gonka-nop govmodel delegate %s <participant-address>", modelID)
+	return nil
 }
 
 // runGovmodelTx is the shared shell for the three tx commands.
