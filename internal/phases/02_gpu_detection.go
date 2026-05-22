@@ -133,7 +133,7 @@ func (p *GPUDetection) Run(ctx context.Context, state *config.State) error {
 	ui.Success("Configuration optimized for %d GPUs", len(gpus))
 
 	// Prompt for custom MLNode image override (skip if already set via --mlnode-image
-	// flag OR if we're in non-interactive --yes mode where the operator has signalled
+	// flag OR if we're in non-interactive --yes mode where the operator has signaled
 	// they want defaults). Without this guard the prompt errors out under --yes.
 	switch {
 	case state.CustomMLNodeImage != "":
@@ -158,7 +158,7 @@ func (p *GPUDetection) Run(ctx context.Context, state *config.State) error {
 	// the operator explicitly passed --attention-backend (handled upstream by
 	// setupOverrides registering the override).
 	if ui.IsNonInteractive() && state.AttentionBackend == "" {
-		state.AttentionBackend = "FLASHINFER"
+		state.AttentionBackend = defaultAttentionBackend
 		ui.Info("Non-interactive mode: using default attention backend FLASHINFER")
 		return nil
 	}
@@ -175,7 +175,7 @@ func (p *GPUDetection) Run(ctx context.Context, state *config.State) error {
 	if strings.Contains(selectedBackend, "FLASH_ATTN") {
 		state.AttentionBackend = "FLASH_ATTN"
 	} else {
-		state.AttentionBackend = "FLASHINFER"
+		state.AttentionBackend = defaultAttentionBackend
 	}
 
 	return nil
@@ -512,7 +512,7 @@ func fetchLatestBlackwellTag() string {
 // selectAttentionBackend returns the vLLM attention backend for the GPU architecture.
 // FLASHINFER is the standard backend across all architectures in mlnode 3.0.12+.
 func selectAttentionBackend(_ string) string {
-	return "FLASHINFER"
+	return defaultAttentionBackend
 }
 
 // FormatGPUSummary returns a formatted GPU summary string

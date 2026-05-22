@@ -8,6 +8,8 @@ import (
 	"github.com/inc4/gonka-nop/internal/config"
 )
 
+const testAPIBinaryVersion = "v0.2.12-api-post3"
+
 // TestRunUpdateAPIOnly_RequiresVersion ensures --api-only without --version
 // is rejected at flag-validation time (TC-6.* flag handling).
 func TestRunUpdateAPIOnly_RequiresVersion(t *testing.T) {
@@ -29,7 +31,7 @@ func TestRunUpdateAPIOnly_RequiresVersion(t *testing.T) {
 func TestRunUpdateAPIOnly_RequiresDeployment(t *testing.T) {
 	defer resetUpdateAPIFlags()
 	updateAPIOnly = true
-	updateAPIVersion = "v0.2.12-api-post3"
+	updateAPIVersion = testAPIBinaryVersion
 
 	state := &config.State{OutputDir: ""}
 	err := runUpdateAPIOnly(context.Background(), state)
@@ -106,8 +108,8 @@ func TestRunUpdateAPIOnly_BuildHelpers(t *testing.T) {
 // (round-trip persistence is covered by config/versions_apirelease_test.go).
 func TestStateAssignmentForAPIBinaryVersion(t *testing.T) {
 	state := &config.State{OutputDir: t.TempDir()}
-	state.Versions.APIBinaryVersion = "v0.2.12-api-post3"
-	if state.Versions.APIBinaryVersion != "v0.2.12-api-post3" {
+	state.Versions.APIBinaryVersion = testAPIBinaryVersion
+	if state.Versions.APIBinaryVersion != testAPIBinaryVersion {
 		t.Errorf("APIBinaryVersion field not settable: %q", state.Versions.APIBinaryVersion)
 	}
 }

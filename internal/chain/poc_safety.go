@@ -186,11 +186,10 @@ func derivePhase(jsonBytes []byte) (*SafetyCheck, error) {
 	safe := phase == PhaseInference
 	blocksUntilSafe := int64(0)
 	if !safe {
-		// Time until end of current unsafe window.
+		// Time until end of current unsafe window. nextPhase is the END
+		// of the unsafe span (next safe block), so blocksUntilSafe is the
+		// delta from now to that.
 		blocksUntilSafe = nextPhase - blockHeight
-		if phase != PhaseInference {
-			// We're unsafe; nextPhase is the END of unsafe window, hence safety arrives there.
-		}
 	}
 	// ~5s per block on mainnet
 	secondsUntilSafe := int(blocksUntilSafe * 5)
