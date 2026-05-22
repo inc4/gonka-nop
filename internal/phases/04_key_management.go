@@ -85,6 +85,15 @@ func (p *KeyManagement) runQuickWorkflow(ctx context.Context, state *config.Stat
 	if len(password) < 8 {
 		return fmt.Errorf("keyring password must be at least 8 characters")
 	}
+	// bcrypt (used by cosmos-sdk's keyring "file" backend) caps the
+	// hashable password length at 72 bytes. cosmos-sdk concatenates the
+	// password with internal metadata before bcrypt, so the practical safe
+	// ceiling is ~50-60 characters. Discovered the hard way on the
+	// 2026-05-16 mainnet redeploy: a 24-char password failed with
+	// "bcrypt: password length exceeds 72 bytes" during `inferenced keys add`.
+	if len(password) > 50 {
+		return fmt.Errorf("keyring password must be at most 50 characters (cosmos-sdk file keyring uses bcrypt; longer values overflow the 72-byte limit after the SDK's internal concatenation)")
+	}
 	state.KeyringPassword = password
 
 	if p.mocked {
@@ -241,6 +250,15 @@ func (p *KeyManagement) runSecureWorkflow(ctx context.Context, state *config.Sta
 	}
 	if len(password) < 8 {
 		return fmt.Errorf("keyring password must be at least 8 characters")
+	}
+	// bcrypt (used by cosmos-sdk's keyring "file" backend) caps the
+	// hashable password length at 72 bytes. cosmos-sdk concatenates the
+	// password with internal metadata before bcrypt, so the practical safe
+	// ceiling is ~50-60 characters. Discovered the hard way on the
+	// 2026-05-16 mainnet redeploy: a 24-char password failed with
+	// "bcrypt: password length exceeds 72 bytes" during `inferenced keys add`.
+	if len(password) > 50 {
+		return fmt.Errorf("keyring password must be at most 50 characters (cosmos-sdk file keyring uses bcrypt; longer values overflow the 72-byte limit after the SDK's internal concatenation)")
 	}
 	state.KeyringPassword = password
 

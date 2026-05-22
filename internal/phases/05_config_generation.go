@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/inc4/gonka-nop/internal/config"
+	"github.com/inc4/gonka-nop/internal/devshard"
 	"github.com/inc4/gonka-nop/internal/ui"
 )
 
@@ -28,12 +29,9 @@ const (
 	defaultHFHome           = DefaultHFHome
 )
 
-// SupportedModels lists the models supported by the Gonka network.
-var SupportedModels = []string{
-	"Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
-	"Qwen/QwQ-32B",
-	"Qwen/Qwen3-32B-FP8",
-}
+// SupportedModels has moved to model_recipes.go as a
+// map[string]ModelRecipe. Use SupportedModelNames() for the deterministic
+// string slice that was previously inlined here.
 
 // ConfigGeneration generates configuration files
 type ConfigGeneration struct{}
@@ -90,6 +88,14 @@ func (p *ConfigGeneration) Run(_ context.Context, state *config.State) error {
 		return err
 	}
 	ui.Detail("Created: %s/docker-compose.yml", state.OutputDir)
+
+	// M12: create devshards/{bin,data} directories required by versiond bind mounts.
+	if err := ui.WithSpinner("Creating devshards/{bin,data} directories", func() error {
+		return ensureDevshardsDirs(state.OutputDir)
+	}); err != nil {
+		return err
+	}
+	ui.Detail("Ready: %s/devshards/{bin,data}", state.OutputDir)
 
 	// Generate mlnode-related configs (skip for network-only topology)
 	if !state.IsNetworkOnly() {
@@ -389,7 +395,8 @@ DAPI_CHAIN_NODE__P2P_URL=tcp://node:26656
 # DDoS Protection
 # Block direct access to chain endpoints via proxy
 GONKA_API_BLOCKED_ROUTES='poc-batches training'
-GONKA_API_EXEMPT_ROUTES='chat inference'
+GONKA_API_EXEMPT_ROUTES='chat inference poc/proofs subnet devshard'
+EXEMPT_CONN_LIMIT=200
 DISABLE_CHAIN_API=true
 DISABLE_CHAIN_RPC=false
 DISABLE_CHAIN_GRPC=true
@@ -417,7 +424,7 @@ VLLM_ATTENTION_BACKEND=%s
 # RPC Servers (for state sync)
 RPC_SERVER_URL_1=%s
 RPC_SERVER_URL_2=%s
-`,
+%s`,
 		keyName,
 		keyringPassword,
 		state.AccountPubKey,
@@ -442,9 +449,72 @@ RPC_SERVER_URL_2=%s
 		attentionBackend,
 		seedRPCURL,
 		seedRPCURL,
+		renderPostgresEnv(state),
 	)
 
 	return os.WriteFile(filepath.Join(state.OutputDir, "config.env"), []byte(content), 0600)
+}
+
+// ensureDevshardsDirs creates devshards/{bin,data} under outputDir with
+// mode 0750. Idempotent: pre-existing dirs are left untouched (mode
+// preserved per UC-1-A3 — the operator may have intentionally set 0700
+// or pointed data at a symlink to a big-disk mount per UC-1-EDGE3).
+//
+// Required because versiond mounts these as bind volumes; Docker would
+// otherwise create them as root-owned, breaking the operator's ability
+// to inspect contents.
+func ensureDevshardsDirs(outputDir string) error {
+	for _, sub := range []string{"bin", "data"} {
+		dir := filepath.Join(outputDir, "devshards", sub)
+		// os.Stat first so we can leave pre-existing untouched.
+		if info, err := os.Stat(dir); err == nil {
+			if !info.IsDir() {
+				return fmt.Errorf("%s exists but is not a directory", dir)
+			}
+			continue // already there — no-op
+		}
+		if err := os.MkdirAll(dir, 0750); err != nil {
+			return fmt.Errorf("create %s: %w", dir, err)
+		}
+	}
+	return nil
+}
+
+// renderPostgresEnv produces the optional Postgres devshardd backend
+// env block for config.env. Returns the empty string when
+// state.DevshardConfig.PostgresHost is empty (file backend default).
+//
+// Values flow into the api container at `docker compose up` via the
+// MergeEnv path in internal/docker/compose.go — upstream's
+// ${POSTGRES_*:-default} resolution in api env reads these.
+//
+// SECURITY: PostgresPassword is rendered into config.env which is
+// already 0600 (line above). No new exposure surface.
+func renderPostgresEnv(state *config.State) string {
+	d := state.DevshardConfig
+	if d.PostgresHost == "" {
+		return ""
+	}
+	port := d.PostgresPort
+	if port == "" {
+		port = "5432"
+	}
+	db := d.PostgresDB
+	if db == "" {
+		db = "payloads"
+	}
+	user := d.PostgresUser
+	if user == "" {
+		user = "payloads"
+	}
+	return fmt.Sprintf(`
+# Devshardd Postgres backend (M12; empty PostgresHost = file backend default)
+POSTGRES_HOST=%s
+POSTGRES_PORT=%s
+POSTGRES_DB=%s
+POSTGRES_USER=%s
+POSTGRES_PASSWORD=%s
+`, d.PostgresHost, port, db, user, d.PostgresPassword)
 }
 
 func generateNodeConfig(state *config.State) error {
@@ -516,11 +586,31 @@ func generateNodeConfig(state *config.State) error {
 }
 
 // buildVLLMArgs builds the vLLM command-line arguments from state.
+//
+// When state.SelectedModel maps to a SupportedModels recipe whose VLLMArgs
+// is non-nil, the recipe args are emitted verbatim (the recipe is
+// authoritative — recommended for new models like Kimi-K2.6 that require
+// model-specific parsers and attention backends).
+//
+// Otherwise (legacy path for Qwen3-235B / Qwen3-32B-FP8 / QwQ-32B and any
+// model not in the registry), args are derived from state. This keeps
+// existing operators byte-compatible across the M11 upgrade (NFR-M11-5).
+//
 // Note: --quantization fp8 is NOT added even for FP8 models — the mlnode runner
 // uses dtype=float16 which avoids FP8 block_n alignment errors with MoE experts.
 // Note: --pipeline-parallel-size is NOT added — the mlnode runner auto-calculates
 // PP from available GPUs (e.g. 8 GPUs / TP=4 → PP=2).
 func buildVLLMArgs(state *config.State) []string {
+	if state.SelectedModel != "" {
+		if recipe, ok := SupportedModels[state.SelectedModel]; ok && len(recipe.VLLMArgs) > 0 {
+			// Recipe authoritative: return a defensive copy so callers can't
+			// mutate the registry.
+			out := make([]string, len(recipe.VLLMArgs))
+			copy(out, recipe.VLLMArgs)
+			return out
+		}
+	}
+
 	var args []string
 
 	// GPU memory utilization (0.88-0.94, not 0.9/0.99)
@@ -574,6 +664,14 @@ func generateDockerCompose(state *config.State) error {
 	ethereumNetwork := state.EthereumNetwork
 	if ethereumNetwork == "" {
 		ethereumNetwork = networkNameMainnet
+	}
+
+	// M12: render versiond block from state (devshardd off-chain payload
+	// shard service). RenderVersiondBlock fails fast if any required state
+	// field is empty per FR-M12-1.
+	versiondBlock, err := devshard.RenderVersiondBlock(state, v.Versiond)
+	if err != nil {
+		return fmt.Errorf("render versiond block: %w", err)
 	}
 
 	content := fmt.Sprintf(`# Gonka Node Docker Compose
@@ -654,7 +752,7 @@ services:
       - DAPI_API__PUBLIC_SERVER_PORT=9000
       - DAPI_API__ML_SERVER_PORT=9100
       - DAPI_API__ADMIN_SERVER_PORT=9200
-    ports:
+%s    ports:
       # Port 9100: ML callback. Bound to localhost for same-server setups;
       # exposed on all interfaces for network-only topology (remote MLNodes need access).
       - "%s:9100"  # ML callback
@@ -685,6 +783,7 @@ services:
     depends_on:
       - api
 
+%s
   proxy:
     container_name: proxy
     image: ghcr.io/product-science/proxy:%s
@@ -700,7 +799,8 @@ services:
       - DASHBOARD_PORT=5173
       # DDoS protection: block direct chain endpoints
       - GONKA_API_BLOCKED_ROUTES=${GONKA_API_BLOCKED_ROUTES:-poc-batches training}
-      - GONKA_API_EXEMPT_ROUTES=${GONKA_API_EXEMPT_ROUTES:-chat inference}
+      - GONKA_API_EXEMPT_ROUTES=${GONKA_API_EXEMPT_ROUTES:-chat inference poc/proofs subnet devshard}
+      - EXEMPT_CONN_LIMIT=${EXEMPT_CONN_LIMIT:-200}
       - DISABLE_CHAIN_API=${DISABLE_CHAIN_API:-true}
       - DISABLE_CHAIN_RPC=${DISABLE_CHAIN_RPC:-false}
       - DISABLE_CHAIN_GRPC=${DISABLE_CHAIN_GRPC:-true}
@@ -717,8 +817,11 @@ services:
       - "5173"
     restart: unless-stopped
 `, v.TMKMS, v.Node, persistentPeers, internalP2PPort(state), v.API,
+		devshard.APIEnvAdditions,
 		apiPort9100Binding(state),
-		v.Bridge, ethereumNetwork, beaconStateURL, v.Proxy, v.Explorer)
+		v.Bridge, ethereumNetwork, beaconStateURL,
+		versiondBlock,
+		v.Proxy, v.Explorer)
 
 	return os.WriteFile(filepath.Join(state.OutputDir, "docker-compose.yml"), []byte(content), 0600)
 }
@@ -756,6 +859,15 @@ func resolveVersions(state *config.State) config.ImageVersions {
 	}
 	if v.Explorer == "" {
 		v.Explorer = "latest"
+	}
+	// M12 FR-M12-15: defensive fallback for Versiond — defends against
+	// state migrated from pre-Slice-1 binaries that lacked the field.
+	if v.Versiond == "" {
+		fb := config.FallbackMainnetVersions()
+		if state.IsTestNet {
+			fb = config.FallbackTestnetVersions()
+		}
+		v.Versiond = fb.Versiond
 	}
 
 	return v

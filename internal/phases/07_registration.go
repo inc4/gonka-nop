@@ -1,17 +1,15 @@
 package phases
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/inc4/gonka-nop/internal/chain"
 	"github.com/inc4/gonka-nop/internal/config"
-	"github.com/inc4/gonka-nop/internal/docker"
 	"github.com/inc4/gonka-nop/internal/ui"
 )
 
@@ -60,7 +58,7 @@ func (p *Registration) Run(ctx context.Context, state *config.State) error {
 	}
 
 	// Fetch consensus key for display and verification
-	consensusKey, err := FetchConsensusKey(ctx, adminURL, state)
+	consensusKey, err := chain.FetchConsensusKey(ctx, adminURL, state)
 	if err != nil {
 		ui.Warn("Could not fetch consensus key: %v", err)
 		ui.Detail("The consensus key may become available after the node finishes syncing")
@@ -110,7 +108,7 @@ func (p *Registration) runQuick(ctx context.Context, state *config.State) error 
 	ui.Detail("Command: %s", registerCmd)
 
 	err := ui.WithSpinner("Registering node on-chain", func() error {
-		_, execErr := RunComposeExec(ctx, state, "api", registerCmd)
+		_, execErr := chain.RunComposeExec(ctx, state, "api", registerCmd)
 		return execErr
 	})
 	if err != nil {
@@ -126,7 +124,7 @@ func (p *Registration) runQuick(ctx context.Context, state *config.State) error 
 		return nil
 	}
 	if state.KeyringPassword == "" {
-		p.loadKeyringPassword(state)
+		state.KeyringPassword = chain.LoadKeyringPassword(state)
 	}
 
 	ui.Info("Granting ML operations permissions...")
@@ -143,7 +141,7 @@ func (p *Registration) runQuick(ctx context.Context, state *config.State) error 
 	)
 
 	err = ui.WithSpinner("Granting ML permissions", func() error {
-		_, execErr := RunComposeExec(ctx, state, "api", grantCmd)
+		_, execErr := chain.RunComposeExec(ctx, state, "api", grantCmd)
 		return execErr
 	})
 	if err != nil {
@@ -256,7 +254,7 @@ func (p *Registration) runTestnet(ctx context.Context, state *config.State) erro
 	// Step 2: Grant ML permissions (uses /chain-rpc/ path for tx commands)
 	// Fall back to config.env if password is empty (old state files).
 	if state.KeyringPassword == "" {
-		p.loadKeyringPassword(state)
+		state.KeyringPassword = chain.LoadKeyringPassword(state)
 	}
 	if state.ColdKeyName != "" && state.WarmKeyAddress != "" && state.KeyringPassword != "" {
 		p.tryGrantPermissions(ctx, state, rpcURL, chainID)
@@ -315,7 +313,7 @@ func (p *Registration) tryTestnetRegister(ctx context.Context, state *config.Sta
 	ui.Detail("Command: %s", registerCmd)
 
 	err := ui.WithSpinner("Registering node on-chain", func() error {
-		_, execErr := RunComposeExec(ctx, state, "api", registerCmd)
+		_, execErr := chain.RunComposeExec(ctx, state, "api", registerCmd)
 		return execErr
 	})
 	if err != nil {
@@ -340,7 +338,7 @@ func (p *Registration) tryGrantPermissions(ctx context.Context, state *config.St
 	)
 
 	err := ui.WithSpinner("Granting ML permissions", func() error {
-		_, execErr := RunComposeExec(ctx, state, "api", grantCmd)
+		_, execErr := chain.RunComposeExec(ctx, state, "api", grantCmd)
 		return execErr
 	})
 	if err != nil {
@@ -380,22 +378,6 @@ func (p *Registration) waitForManualRegistration(state *config.State) bool {
 	return true
 }
 
-// loadKeyringPassword tries to recover the keyring password from config.env
-// as a fallback (e.g. for state files created before password was persisted).
-func (p *Registration) loadKeyringPassword(state *config.State) {
-	envFile := state.OutputDir + "/config.env"
-	envVars, err := docker.ParseEnvFile(envFile)
-	if err != nil {
-		return
-	}
-	for _, kv := range envVars {
-		if strings.HasPrefix(kv, "KEYRING_PASSWORD=") {
-			state.KeyringPassword = strings.TrimPrefix(kv, "KEYRING_PASSWORD=")
-			return
-		}
-	}
-}
-
 // isAPIReady does a single probe of the Admin API — returns true if responsive.
 func (p *Registration) isAPIReady(ctx context.Context, adminURL string) bool {
 	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -412,176 +394,6 @@ func (p *Registration) isAPIReady(ctx context.Context, adminURL string) bool {
 	}
 	_ = resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
-}
-
-// FetchConsensusKey fetches the consensus (validator) key.
-// Tries three sources in order:
-//  1. setup/report consensus_key_match details (if API includes it)
-//  2. setup/report validator_in_set details (if already a validator)
-//  3. Tendermint RPC /status via docker exec (most reliable for fresh nodes)
-func FetchConsensusKey(ctx context.Context, adminURL string, state *config.State) (string, error) {
-	// Try Admin API first (no docker exec needed)
-	key, err := fetchConsensusKeyFromReport(ctx, adminURL)
-	if err == nil {
-		return key, nil
-	}
-
-	// Fall back to Tendermint RPC via docker exec into node container
-	key, err = fetchConsensusKeyFromRPC(ctx, state)
-	if err == nil {
-		return key, nil
-	}
-
-	return "", fmt.Errorf("consensus key not available from setup/report or Tendermint RPC: %w", err)
-}
-
-// fetchConsensusKeyFromReport tries to extract the key from setup/report checks.
-func fetchConsensusKeyFromReport(ctx context.Context, adminURL string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, adminURL+"/admin/v1/setup/report", nil)
-	if err != nil {
-		return "", fmt.Errorf("create request: %w", err)
-	}
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("fetch setup/report: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("setup/report returned status %d", resp.StatusCode)
-	}
-
-	var report struct {
-		Checks []struct {
-			ID      string          `json:"id"`
-			Status  string          `json:"status"`
-			Details json.RawMessage `json:"details"`
-		} `json:"checks"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&report); err != nil {
-		return "", fmt.Errorf("decode setup/report: %w", err)
-	}
-
-	// Try consensus_key_match first (may have validator_key in details)
-	for _, check := range report.Checks {
-		if check.ID == "consensus_key_match" && check.Details != nil {
-			var d struct {
-				ValidatorKey string `json:"validator_key"`
-			}
-			if json.Unmarshal(check.Details, &d) == nil && d.ValidatorKey != "" {
-				return d.ValidatorKey, nil
-			}
-		}
-	}
-
-	// Fall back to validator_in_set (has consensus_pubkey when active)
-	for _, check := range report.Checks {
-		if check.ID == "validator_in_set" && check.Details != nil {
-			var d struct {
-				ConsensusPubKey string `json:"consensus_pubkey"`
-			}
-			if json.Unmarshal(check.Details, &d) == nil && d.ConsensusPubKey != "" {
-				return d.ConsensusPubKey, nil
-			}
-		}
-	}
-
-	return "", fmt.Errorf("consensus key not found in setup/report checks")
-}
-
-// fetchConsensusKeyFromRPC gets the validator key from Tendermint RPC via docker exec.
-// This is the most reliable method — works even on fresh unregistered nodes.
-// Parses: /status -> result.validator_info.pub_key.value
-func fetchConsensusKeyFromRPC(ctx context.Context, state *config.State) (string, error) {
-	// Use wget (available in node container) since curl may not be present
-	shellCmd := `wget -qO- http://localhost:26657/status 2>/dev/null`
-
-	execArgs := []string{"exec", "node", "sh", "-c", shellCmd}
-
-	var name string
-	var args []string
-	if state.UseSudo {
-		name = cmdSudo
-		args = append([]string{"-E", cmdDocker}, execArgs...)
-	} else {
-		name = cmdDocker
-		args = execArgs
-	}
-
-	cmdCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(cmdCtx, name, args...) // #nosec G204
-	cmd.Dir = state.OutputDir
-
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("docker exec node RPC status: %w", err)
-	}
-
-	var rpcStatus struct {
-		Result struct {
-			ValidatorInfo struct {
-				PubKey struct {
-					Value string `json:"value"`
-				} `json:"pub_key"`
-			} `json:"validator_info"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(out, &rpcStatus); err != nil {
-		return "", fmt.Errorf("parse RPC status: %w", err)
-	}
-
-	key := rpcStatus.Result.ValidatorInfo.PubKey.Value
-	if key == "" {
-		return "", fmt.Errorf("validator pub_key.value is empty in RPC status")
-	}
-	return key, nil
-}
-
-// RunComposeExec runs a shell command inside a container via docker compose run.
-// Returns combined stdout+stderr output.
-func RunComposeExec(ctx context.Context, state *config.State, service, shellCmd string) (string, error) {
-	files := state.ComposeFiles
-	if len(files) == 0 {
-		files = []string{"docker-compose.yml"}
-	}
-	// 1 (compose) + 2*len(files) (-f file) + 7 (run --rm --no-deps service sh -c cmd)
-	composeArgs := make([]string, 0, 1+2*len(files)+7)
-	composeArgs = append(composeArgs, "compose")
-	for _, f := range files {
-		composeArgs = append(composeArgs, "-f", f)
-	}
-	composeArgs = append(composeArgs, "run", "--rm", "--no-deps", service, "sh", "-c", shellCmd)
-
-	var cmd *exec.Cmd
-	if state.UseSudo {
-		sudoArgs := append([]string{"-E", cmdDocker}, composeArgs...)
-		cmd = exec.CommandContext(ctx, cmdSudo, sudoArgs...) // #nosec G204
-	} else {
-		cmd = exec.CommandContext(ctx, cmdDocker, composeArgs...) // #nosec G204
-	}
-	cmd.Dir = state.OutputDir
-
-	// Load config.env to suppress Docker Compose "variable is not set" warnings
-	envFile := state.OutputDir + "/config.env"
-	fileEnv, envErr := docker.ParseEnvFile(envFile)
-	if envErr == nil && len(fileEnv) > 0 {
-		cmd.Env = docker.MergeEnv(fileEnv)
-	}
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		combined := strings.TrimSpace(stdout.String() + "\n" + stderr.String())
-		return combined, fmt.Errorf("docker compose run %s: %w\n%s", service, err, combined)
-	}
-
-	return strings.TrimSpace(stdout.String()), nil
 }
 
 // WaitForRegistration polls setup/report until consensus_key_match and

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/inc4/gonka-nop/internal/config"
+	"github.com/inc4/gonka-nop/internal/docker"
 	"github.com/inc4/gonka-nop/internal/ui"
 )
 
@@ -122,9 +123,9 @@ func (p *MLNodeFirewall) Run(_ context.Context, state *config.State) error {
 func runIPTables(useSudo bool, args ...string) error {
 	var cmd *exec.Cmd
 	if useSudo {
-		cmd = exec.Command(cmdSudo, append([]string{"iptables"}, args...)...)
+		cmd = exec.Command(docker.CmdSudo, append([]string{"iptables"}, args...)...) // #nosec G204 - args constructed internally from state (IP + port)
 	} else {
-		cmd = exec.Command("iptables", args...)
+		cmd = exec.Command("iptables", args...) // #nosec G204 - args constructed internally from state (IP + port)
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -141,9 +142,9 @@ func persistIPTables(useSudo bool) error {
 	args := []string{"netfilter-persistent", "save"}
 	var cmd *exec.Cmd
 	if useSudo {
-		cmd = exec.Command(cmdSudo, args...)
+		cmd = exec.Command(docker.CmdSudo, args...) // #nosec G204 - hard-coded args literal
 	} else {
-		cmd = exec.Command(args[0], args[1:]...)
+		cmd = exec.Command(args[0], args[1:]...) // #nosec G204 - hard-coded args literal
 	}
 	if err := cmd.Run(); err == nil {
 		return nil
@@ -156,9 +157,9 @@ func persistIPTables(useSudo bool) error {
 
 	saveCmd := "iptables-save > /etc/iptables/rules.v4"
 	if useSudo {
-		cmd = exec.Command(cmdSudo, "sh", "-c", saveCmd)
+		cmd = exec.Command(docker.CmdSudo, "sh", "-c", saveCmd) // #nosec G204 - saveCmd is a hard-coded literal
 	} else {
-		cmd = exec.Command("sh", "-c", saveCmd)
+		cmd = exec.Command("sh", "-c", saveCmd) // #nosec G204 - saveCmd is a hard-coded literal
 	}
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("iptables-save: %w", err)
@@ -169,9 +170,9 @@ func persistIPTables(useSudo bool) error {
 	writeCmd := fmt.Sprintf("printf '#!/bin/sh\\niptables-restore < /etc/iptables/rules.v4\\n' > %s && chmod +x %s",
 		hookPath, hookPath)
 	if useSudo {
-		cmd = exec.Command(cmdSudo, "sh", "-c", writeCmd)
+		cmd = exec.Command(docker.CmdSudo, "sh", "-c", writeCmd) // #nosec G204 - writeCmd built from compile-time hookPath constant
 	} else {
-		cmd = exec.Command("sh", "-c", writeCmd)
+		cmd = exec.Command("sh", "-c", writeCmd) // #nosec G204 - writeCmd built from compile-time hookPath constant
 	}
 	_ = cmd.Run() // non-fatal if hook install fails
 

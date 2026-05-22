@@ -22,10 +22,18 @@ type ImageVersions struct {
 	ProxySSL string `json:"proxy_ssl"` // proxy-ssl image tag
 	Bridge   string `json:"bridge"`    // bridge image tag (may include @sha256: digest)
 	Explorer string `json:"explorer"`  // explorer image tag
+	Versiond string `json:"versiond"`  // versiond image tag (launches devshardd, FR-M12-15)
 
 	// From docker-compose.mlnode.yml
 	MLNode string `json:"mlnode"` // mlnode image tag (e.g. "3.0.12-post2")
 	Nginx  string `json:"nginx"`  // nginx image tag
+
+	// Cosmovisor-managed binaries (NOT image tags). Populated by the M11
+	// `update --api-only` flow; persists the LAST hotfix version applied so
+	// `status` and `update --check` can report it. Distinct from `API` because
+	// the Cosmovisor binary can diverge from the api image tag (the whole
+	// point of the race-releases hotfix channel).
+	APIBinaryVersion string `json:"api_binary_version,omitempty"`
 
 	// Metadata
 	FetchedAt time.Time `json:"fetched_at,omitempty"`
@@ -56,6 +64,7 @@ func FallbackMainnetVersions() ImageVersions {
 		ProxySSL: "0.2.9-post3",
 		Bridge:   "0.2.5-post5",
 		Explorer: "latest",
+		Versiond: "0.2.9-post3",
 		MLNode:   "3.0.12-post2",
 		Nginx:    "1.28.0",
 		Source:   "fallback",
@@ -72,6 +81,7 @@ func FallbackTestnetVersions() ImageVersions {
 		ProxySSL: "0.2.9-post2",
 		Bridge:   "0.2.10-pre-release",
 		Explorer: "latest",
+		Versiond: "0.2.10-pre-release",
 		MLNode:   "3.0.12-post3",
 		Nginx:    "1.28.0",
 		Source:   "fallback",
@@ -135,14 +145,17 @@ func ParseComposeImageVersions(composeContent, mlnodeContent string) (ImageVersi
 	v.Proxy = extractImageTag(composeContent, "proxy")
 	v.ProxySSL = extractImageTag(composeContent, "proxy-ssl")
 	v.Explorer = extractImageTag(composeContent, "explorer")
+	v.Versiond = extractImageTag(composeContent, "versiond")
 
 	// Parse docker-compose.mlnode.yml
 	v.MLNode = extractMLNodeTag(mlnodeContent)
 	v.Nginx = extractNginxTag(mlnodeContent)
 
-	// Validate that we got at least the critical versions
-	if v.Node == "" || v.API == "" {
-		return v, fmt.Errorf("could not parse node or api image versions from compose files")
+	// Validate that we got at least the critical versions. Versiond is required
+	// per FR-M12-15: an upstream branch missing the versiond line would silently
+	// render an empty image tag, breaking the FR-M12-1 generated compose.
+	if v.Node == "" || v.API == "" || v.Versiond == "" {
+		return v, fmt.Errorf("could not parse node, api, or versiond image versions from compose files")
 	}
 
 	return v, nil

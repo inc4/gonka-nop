@@ -23,8 +23,56 @@ type NodeStatus struct {
 	Security   SecurityStatus
 	NodeConfig NodeConfigStatus
 
+	// Sync is populated from CometBFT /status PLUS node container log
+	// inspection so the display can explain what's happening when /status
+	// reports `height=0 catching_up=true` for minutes (the state-sync window).
+	// See sync.go.
+	Sync *SyncStatus
+
+	// Collateral is the participant's on-chain collateral balance. Populated
+	// by the cmd layer (it has access to internal/chain). nil = not fetched
+	// or query failed; section is omitted when nil.
+	Collateral *CollateralInfo
+
+	// GovernanceModels is the per-governance-model opt-in state for this
+	// node's cold key, fetched by the cmd layer (which can import chain)
+	// and assigned before Display().
+	//
+	// Display rules (revised 2026-05-22):
+	//   - non-empty: render entries verbatim
+	//   - empty + AvailableGovernanceModels non-empty: render an
+	//     informative "no delegations yet" section listing the chain's
+	//     governance models + the `govmodel delegate` command (without
+	//     this, fresh deploys had no hint that the command exists)
+	//   - both empty: section is OMITTED (original architect cond #10 —
+	//     only when chain has zero governance models at all)
+	GovernanceModels []GovModelState
+
+	// AvailableGovernanceModels lists the chain-known governance model IDs
+	// independent of this participant's delegations. Populated by the cmd
+	// layer best-effort. nil = not fetched / query failed.
+	AvailableGovernanceModels []string
+
 	// Raw data from setup/report for display
 	SetupReport *SetupReport
+}
+
+// GovModelState mirrors chain.PoCDelegationState locally so the status
+// package stays independent of internal/chain. Populated by cmd/root.go's
+// runStatus before invoking Display.
+type GovModelState struct {
+	ModelID    string
+	Delegate   string // delegatee address; empty when not delegated
+	Refused    bool
+	IntentOnly bool
+}
+
+// CollateralInfo mirrors chain.CollateralBalance locally so the status
+// package stays independent of internal/chain.
+type CollateralInfo struct {
+	Amount uint64 // ngonka
+	Denom  string
+	Found  bool // false when chain returned NotFound (fresh participant)
 }
 
 // OverviewStatus holds general node status
@@ -651,19 +699,22 @@ func fetchBlockchainStatus(status *NodeStatus, cfg *StatusConfig) {
 	// Try to fetch from Tendermint RPC
 	client := &http.Client{Timeout: 5 * time.Second}
 
+	var tmStatus *TendermintStatus
+
 	// Fetch /status
 	resp, err := client.Get(cfg.TendermintURL + "/status")
 	if err == nil && resp.StatusCode == 200 {
 		defer func() { _ = resp.Body.Close() }()
-		var tmStatus TendermintStatus
-		if json.NewDecoder(resp.Body).Decode(&tmStatus) == nil {
+		var ts TendermintStatus
+		if json.NewDecoder(resp.Body).Decode(&ts) == nil {
+			tmStatus = &ts
 			var height int64
-			_, _ = fmt.Sscanf(tmStatus.Result.SyncInfo.LatestBlockHeight, "%d", &height)
+			_, _ = fmt.Sscanf(ts.Result.SyncInfo.LatestBlockHeight, "%d", &height)
 			status.Blockchain.BlockHeight = height
-			status.Blockchain.CatchingUp = tmStatus.Result.SyncInfo.CatchingUp
-			status.Blockchain.Synced = !tmStatus.Result.SyncInfo.CatchingUp
-			status.Blockchain.ValidatorAddr = tmStatus.Result.ValidatorInfo.Address
-			status.Blockchain.IsValidator = tmStatus.Result.ValidatorInfo.Address != ""
+			status.Blockchain.CatchingUp = ts.Result.SyncInfo.CatchingUp
+			status.Blockchain.Synced = !ts.Result.SyncInfo.CatchingUp
+			status.Blockchain.ValidatorAddr = ts.Result.ValidatorInfo.Address
+			status.Blockchain.IsValidator = ts.Result.ValidatorInfo.Address != ""
 		}
 	}
 
@@ -679,6 +730,12 @@ func fetchBlockchainStatus(status *NodeStatus, cfg *StatusConfig) {
 			status.Blockchain.PeerCountKnown = true
 		}
 	}
+
+	// Derive the rich Sync section — looks at node container logs when /status
+	// alone doesn't explain what's happening (e.g. state-sync hides height=0
+	// until all chunks are applied). Always populated; nil only when status
+	// fetching is fully mocked.
+	status.Sync = DeriveSyncStatus(tmStatus, status.Blockchain.PeerCount, defaultDockerLogsTail, 0)
 }
 
 func fetchMLNodeStatus(status *NodeStatus, cfg *StatusConfig) {

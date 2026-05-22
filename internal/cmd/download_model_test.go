@@ -296,19 +296,14 @@ func TestSupportedModels(t *testing.T) {
 		t.Errorf("SupportedModels has %d entries, want at least 3", len(phases.SupportedModels))
 	}
 
-	expected := map[string]bool{
-		testModel235B:        false,
-		testModelQwQ:         false,
-		"Qwen/Qwen3-32B-FP8": false,
+	expected := []string{
+		testModel235B,
+		testModelQwQ,
+		"Qwen/Qwen3-32B-FP8",
 	}
-	for _, m := range phases.SupportedModels {
-		if _, ok := expected[m]; ok {
-			expected[m] = true
-		}
-	}
-	for model, found := range expected {
-		if !found {
-			t.Errorf("SupportedModels missing %q", model)
+	for _, m := range expected {
+		if _, ok := phases.SupportedModels[m]; !ok {
+			t.Errorf("SupportedModels missing %q", m)
 		}
 	}
 }

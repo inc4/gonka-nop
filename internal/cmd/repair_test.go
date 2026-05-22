@@ -1,9 +1,6 @@
 package cmd
 
 import (
-	"archive/zip"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/inc4/gonka-nop/internal/config"
+	"github.com/inc4/gonka-nop/internal/cosmovisor"
 )
 
 const testUpgradeVersion = "v0.2.10"
@@ -299,41 +297,7 @@ func TestParseDigest(t *testing.T) {
 	}
 }
 
-func TestVerifySHA256(t *testing.T) {
-	// Create a temp file with known content
-	dir := t.TempDir()
-	testFile := filepath.Join(dir, "testfile.bin")
-	content := []byte("hello world test content for sha256")
-
-	if err := os.WriteFile(testFile, content, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	// Compute expected hash
-	h := sha256.Sum256(content)
-	expectedHash := hex.EncodeToString(h[:])
-
-	t.Run("matching hash", func(t *testing.T) {
-		err := verifySHA256(testFile, expectedHash)
-		if err != nil {
-			t.Errorf("expected no error for matching hash, got: %v", err)
-		}
-	})
-
-	t.Run("mismatched hash", func(t *testing.T) {
-		err := verifySHA256(testFile, "0000000000000000000000000000000000000000000000000000000000000000")
-		if err == nil {
-			t.Error("expected error for mismatched hash")
-		}
-	})
-
-	t.Run("nonexistent file", func(t *testing.T) {
-		err := verifySHA256(filepath.Join(dir, "nonexistent"), expectedHash)
-		if err == nil {
-			t.Error("expected error for nonexistent file")
-		}
-	})
-}
+// TestVerifySHA256 migrated to internal/cosmovisor/binary_test.go (M11 Slice 1).
 
 func TestUpgradeNameToReleaseTags(t *testing.T) {
 	tests := []struct {
@@ -401,213 +365,8 @@ func TestResolveRepairAdminURL(t *testing.T) {
 	})
 }
 
-func TestFixCosmovisorSymlink(t *testing.T) {
-	// This test verifies symlink creation on the local filesystem
-	// without sudo (which is fine for testing)
-	dir := t.TempDir()
-
-	cosmoDir := filepath.Join(dir, ".inference", "cosmovisor")
-	upgradeDir := filepath.Join(cosmoDir, "upgrades", testUpgradeVersion, "bin")
-	if err := os.MkdirAll(upgradeDir, 0o750); err != nil {
-		t.Fatal(err)
-	}
-
-	symlinkPath := filepath.Join(cosmoDir, "current")
-	targetDir := filepath.Join(cosmoDir, "upgrades", testUpgradeVersion)
-
-	state := &config.State{OutputDir: dir, UseSudo: false}
-
-	t.Run("create new symlink", func(t *testing.T) {
-		err := fixCosmovisorSymlink(t.Context(), state, symlinkPath, targetDir)
-		if err != nil {
-			t.Fatalf("fixCosmovisorSymlink() error: %v", err)
-		}
-
-		// Verify symlink exists and points correctly
-		target, linkErr := os.Readlink(symlinkPath)
-		if linkErr != nil {
-			t.Fatalf("readlink error: %v", linkErr)
-		}
-
-		// Should be relative path
-		if target != "upgrades/v0.2.10" {
-			t.Errorf("symlink target = %q, want %q", target, "upgrades/v0.2.10")
-		}
-
-		// Verify target resolves
-		resolved := filepath.Join(filepath.Dir(symlinkPath), target)
-		if _, err := os.Stat(resolved); os.IsNotExist(err) {
-			t.Error("symlink target does not exist")
-		}
-	})
-
-	t.Run("update existing symlink", func(t *testing.T) {
-		// Create a new upgrade version
-		newUpgradeDir := filepath.Join(cosmoDir, "upgrades", "v0.2.11", "bin")
-		if err := os.MkdirAll(newUpgradeDir, 0o750); err != nil {
-			t.Fatal(err)
-		}
-
-		newTarget := filepath.Join(cosmoDir, "upgrades", "v0.2.11")
-		err := fixCosmovisorSymlink(t.Context(), state, symlinkPath, newTarget)
-		if err != nil {
-			t.Fatalf("fixCosmovisorSymlink() error: %v", err)
-		}
-
-		target, linkErr := os.Readlink(symlinkPath)
-		if linkErr != nil {
-			t.Fatalf("readlink error: %v", linkErr)
-		}
-
-		if target != "upgrades/v0.2.11" {
-			t.Errorf("symlink target = %q, want %q", target, "upgrades/v0.2.11")
-		}
-	})
-}
-
-func TestFindBinaryAsset(t *testing.T) {
-	assets := []ReleaseAsset{
-		{Name: "inferenced-amd64.zip", DownloadURL: "https://example.com/inferenced.zip", SHA256: "abc123", Size: 98000000},
-		{Name: "decentralized-api-amd64.zip", DownloadURL: "https://example.com/api.zip", SHA256: "def456", Size: 191000000},
-		{Name: "checksums.txt", DownloadURL: "https://example.com/checksums.txt", Size: 256},
-	}
-
-	t.Run("find inferenced", func(t *testing.T) {
-		a := findBinaryAsset(assets, "inferenced-amd64.zip")
-		if a == nil {
-			t.Fatal("expected to find inferenced asset")
-		}
-		if a.SHA256 != "abc123" {
-			t.Errorf("SHA256 = %q, want %q", a.SHA256, "abc123")
-		}
-	})
-
-	t.Run("find api", func(t *testing.T) {
-		a := findBinaryAsset(assets, "decentralized-api-amd64.zip")
-		if a == nil {
-			t.Fatal("expected to find api asset")
-		}
-		if a.Size != 191000000 {
-			t.Errorf("Size = %d, want %d", a.Size, 191000000)
-		}
-	})
-
-	t.Run("not found", func(t *testing.T) {
-		a := findBinaryAsset(assets, "nonexistent.zip")
-		if a != nil {
-			t.Error("expected nil for nonexistent asset")
-		}
-	})
-
-	t.Run("empty list", func(t *testing.T) {
-		a := findBinaryAsset(nil, "inferenced-amd64.zip")
-		if a != nil {
-			t.Error("expected nil for empty asset list")
-		}
-	})
-}
-
-func TestShellQuote(t *testing.T) {
-	tests := []struct {
-		name   string
-		input  string
-		expect string
-	}{
-		{
-			name:   "simple path",
-			input:  "/home/user/gonka",
-			expect: "'/home/user/gonka'",
-		},
-		{
-			name:   "path with spaces",
-			input:  "/home/user/my node",
-			expect: "'/home/user/my node'",
-		},
-		{
-			name:   "path with single quote",
-			input:  "/home/user/it's",
-			expect: "'/home/user/it'\\''s'",
-		},
-		{
-			name:   "empty string",
-			input:  "",
-			expect: "''",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := shellQuote(tt.input)
-			if got != tt.expect {
-				t.Errorf("shellQuote(%q) = %q, want %q", tt.input, got, tt.expect)
-			}
-		})
-	}
-}
-
-func TestExtractZipBinary(t *testing.T) {
-	dir := t.TempDir()
-
-	// Create a zip file with a known binary
-	zipPath := filepath.Join(dir, "test.zip")
-	destPath := filepath.Join(dir, "extracted-binary")
-	binaryContent := []byte("#!/bin/sh\necho 'hello'\n")
-
-	// Create the zip
-	zf, err := os.Create(zipPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	zw := zip.NewWriter(zf)
-
-	fw, err := zw.Create("inferenced")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, writeErr := fw.Write(binaryContent); writeErr != nil {
-		t.Fatal(writeErr)
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := zf.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	t.Run("extract existing binary", func(t *testing.T) {
-		err := extractZipBinary(zipPath, destPath, "inferenced", false)
-		if err != nil {
-			t.Fatalf("extractZipBinary() error: %v", err)
-		}
-
-		// Verify extracted content
-		data, readErr := os.ReadFile(destPath)
-		if readErr != nil {
-			t.Fatalf("read extracted file: %v", readErr)
-		}
-		if string(data) != string(binaryContent) {
-			t.Errorf("content mismatch: got %q, want %q", string(data), string(binaryContent))
-		}
-	})
-
-	t.Run("binary not in zip", func(t *testing.T) {
-		err := extractZipBinary(zipPath, filepath.Join(dir, "other"), "nonexistent", false)
-		if err == nil {
-			t.Error("expected error for missing binary in zip")
-		}
-	})
-
-	t.Run("invalid zip file", func(t *testing.T) {
-		invalidZip := filepath.Join(dir, "invalid.zip")
-		if writeErr := os.WriteFile(invalidZip, []byte("not a zip"), 0o600); writeErr != nil {
-			t.Fatal(writeErr)
-		}
-		err := extractZipBinary(invalidZip, filepath.Join(dir, "out"), "inferenced", false)
-		if err == nil {
-			t.Error("expected error for invalid zip")
-		}
-	})
-}
+// TestFixCosmovisorSymlink, TestFindBinaryAsset, TestShellQuote, TestExtractZipBinary
+// migrated to internal/cosmovisor/{symlink,binary,host}_test.go (M11 Slice 1).
 
 func TestDiagnosisStruct(t *testing.T) {
 	d := Diagnosis{
@@ -725,7 +484,7 @@ func TestParseUpgradeInfoBinaries(t *testing.T) {
 			}
 
 			// Check node binary
-			node := findBinaryAsset(assets, repairNodeAsset)
+			node := cosmovisor.FindBinaryAsset(assets, repairNodeAsset)
 			if node == nil {
 				if tt.wantNode != "" {
 					t.Fatal("expected node asset, got nil")
@@ -740,7 +499,7 @@ func TestParseUpgradeInfoBinaries(t *testing.T) {
 			}
 
 			// Check API binary
-			api := findBinaryAsset(assets, repairAPIAsset)
+			api := cosmovisor.FindBinaryAsset(assets, repairAPIAsset)
 			if api != nil && tt.wantAPISHA != "" {
 				if api.SHA256 != tt.wantAPISHA {
 					t.Errorf("API SHA256 = %q, want %q", api.SHA256, tt.wantAPISHA)
@@ -834,7 +593,7 @@ func TestCheckUpgradeInfo_ReturnsAssets(t *testing.T) {
 		t.Fatalf("expected 2 assets, got %d", len(assets))
 	}
 
-	node := findBinaryAsset(assets, repairNodeAsset)
+	node := cosmovisor.FindBinaryAsset(assets, repairNodeAsset)
 	if node == nil {
 		t.Fatal("expected node asset")
 	}
@@ -845,7 +604,7 @@ func TestCheckUpgradeInfo_ReturnsAssets(t *testing.T) {
 		t.Errorf("node URL should point to race-releases repo: %s", node.DownloadURL)
 	}
 
-	api := findBinaryAsset(assets, repairAPIAsset)
+	api := cosmovisor.FindBinaryAsset(assets, repairAPIAsset)
 	if api == nil {
 		t.Fatal("expected API asset")
 	}

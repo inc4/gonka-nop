@@ -1,10 +1,7 @@
 package cmd
 
 import (
-	"archive/zip"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,10 +15,16 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/inc4/gonka-nop/internal/config"
+	"github.com/inc4/gonka-nop/internal/cosmovisor"
 	"github.com/inc4/gonka-nop/internal/docker"
 	"github.com/inc4/gonka-nop/internal/ui"
 	"github.com/spf13/cobra"
 )
+
+// ReleaseAsset is a type alias for cosmovisor.ReleaseAsset; aliased here to
+// minimize churn in functions that fetch and parse GitHub release JSON
+// (parseGitHubReleaseAssets, parseUpgradeInfoBinaries, etc.).
+type ReleaseAsset = cosmovisor.ReleaseAsset
 
 const (
 	repairGHAPIBase       = "https://api.github.com/repos/gonka-ai/gonka/releases/tags/"
@@ -92,14 +95,6 @@ type RepairPlan struct {
 	UpgradeName       string         // from logs or admin API
 	NeedsBinary       bool           // whether binary download is required
 	UpgradeInfoAssets []ReleaseAsset // from upgrade-info.json info field (on-chain source of truth)
-}
-
-// ReleaseAsset holds a downloadable binary from a GitHub release.
-type ReleaseAsset struct {
-	Name        string
-	DownloadURL string
-	SHA256      string
-	Size        int64
 }
 
 // upgradeHandlerMissingRe matches the Cosmovisor upgrade handler panic message.
@@ -498,7 +493,7 @@ func downloadAndPlaceBinaries(ctx context.Context, state *config.State, plan *Re
 	}
 
 	for _, bin := range binaries {
-		asset := findBinaryAsset(assets, bin.assetName)
+		asset := cosmovisor.FindBinaryAsset(assets, bin.assetName)
 		if asset == nil {
 			ui.Warn("Asset %s not found in release, skipping", bin.assetName)
 			continue
@@ -506,7 +501,7 @@ func downloadAndPlaceBinaries(ctx context.Context, state *config.State, plan *Re
 
 		// Download
 		ui.Info("Downloading %s (%d MB)...", asset.Name, asset.Size/(1024*1024))
-		tmpPath, dlErr := downloadAsset(ctx, *asset)
+		tmpPath, dlErr := cosmovisor.DownloadAsset(ctx, *asset)
 		if dlErr != nil {
 			return fmt.Errorf("download %s: %w", asset.Name, dlErr)
 		}
@@ -514,7 +509,7 @@ func downloadAndPlaceBinaries(ctx context.Context, state *config.State, plan *Re
 
 		// Verify SHA256
 		if asset.SHA256 != "" {
-			if verErr := verifySHA256(tmpPath, asset.SHA256); verErr != nil {
+			if verErr := cosmovisor.VerifySHA256(tmpPath, asset.SHA256); verErr != nil {
 				return fmt.Errorf("verify %s: %w", asset.Name, verErr)
 			}
 			ui.Success("SHA256 verified: %s...%s", asset.SHA256[:8], asset.SHA256[len(asset.SHA256)-8:])
@@ -524,19 +519,19 @@ func downloadAndPlaceBinaries(ctx context.Context, state *config.State, plan *Re
 
 		// Create directory and extract binary
 		destDir := filepath.Join(state.OutputDir, bin.destDir)
-		if err := runHostCmd(ctx, state.UseSudo, state.OutputDir,
-			fmt.Sprintf("mkdir -p %s", shellQuote(destDir))); err != nil {
+		if err := cosmovisor.RunHostCmd(ctx, state.UseSudo, state.OutputDir,
+			fmt.Sprintf("mkdir -p %s", cosmovisor.ShellQuote(destDir))); err != nil {
 			return fmt.Errorf("create dir %s: %w", destDir, err)
 		}
 
 		destPath := filepath.Join(destDir, bin.binName)
-		if err := extractZipBinary(tmpPath, destPath, bin.binName, state.UseSudo); err != nil {
+		if err := cosmovisor.ExtractZipBinary(tmpPath, destPath, bin.binName, state.UseSudo); err != nil {
 			return fmt.Errorf("extract %s: %w", asset.Name, err)
 		}
 
 		// chmod +x
-		if err := runHostCmd(ctx, state.UseSudo, state.OutputDir,
-			fmt.Sprintf("chmod +x %s", shellQuote(destPath))); err != nil {
+		if err := cosmovisor.RunHostCmd(ctx, state.UseSudo, state.OutputDir,
+			fmt.Sprintf("chmod +x %s", cosmovisor.ShellQuote(destPath))); err != nil {
 			return fmt.Errorf("chmod %s: %w", destPath, err)
 		}
 
@@ -750,159 +745,11 @@ func buildDirectDownloadAssets(ctx context.Context, upgradeName string) ([]Relea
 	return nil, fmt.Errorf("could not find release for %q via direct download (tried %v)", upgradeName, candidates)
 }
 
-// findBinaryAsset finds an asset by name from the asset list.
-func findBinaryAsset(assets []ReleaseAsset, name string) *ReleaseAsset {
-	for i := range assets {
-		if assets[i].Name == name {
-			return &assets[i]
-		}
-	}
-	return nil
-}
-
-// downloadAsset downloads a release asset to a temporary file.
-func downloadAsset(ctx context.Context, asset ReleaseAsset) (string, error) {
-	dlCtx, cancel := context.WithTimeout(ctx, repairDownloadTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(dlCtx, http.MethodGet, asset.DownloadURL, nil)
-	if err != nil {
-		return "", err
-	}
-
-	client := &http.Client{Timeout: repairDownloadTimeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("download: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download returned %d", resp.StatusCode)
-	}
-
-	tmpFile, err := os.CreateTemp("", "gonka-repair-*.zip")
-	if err != nil {
-		return "", fmt.Errorf("create temp file: %w", err)
-	}
-
-	if _, cpErr := io.Copy(tmpFile, resp.Body); cpErr != nil {
-		_ = tmpFile.Close()
-		_ = os.Remove(tmpFile.Name())
-		return "", fmt.Errorf("write temp file: %w", cpErr)
-	}
-
-	if err := tmpFile.Close(); err != nil {
-		_ = os.Remove(tmpFile.Name())
-		return "", fmt.Errorf("close temp file: %w", err)
-	}
-
-	return tmpFile.Name(), nil
-}
-
-// verifySHA256 verifies a file's SHA256 hash matches the expected value.
-func verifySHA256(filePath, expected string) error {
-	f, err := os.Open(filePath) // #nosec G304 - trusted path from our temp file
-	if err != nil {
-		return fmt.Errorf("open file: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return fmt.Errorf("hash file: %w", err)
-	}
-
-	actual := hex.EncodeToString(h.Sum(nil))
-	if actual != expected {
-		return fmt.Errorf("sha256 mismatch: expected %s, got %s", expected, actual)
-	}
-	return nil
-}
-
-// extractZipBinary extracts a named binary from a zip file to destPath.
-func extractZipBinary(zipPath, destPath, binaryName string, useSudo bool) error {
-	r, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return fmt.Errorf("open zip: %w", err)
-	}
-	defer func() { _ = r.Close() }()
-
-	for _, f := range r.File {
-		// Match the binary name (may be in root or subdirectory)
-		if filepath.Base(f.Name) != binaryName {
-			continue
-		}
-
-		rc, openErr := f.Open()
-		if openErr != nil {
-			return fmt.Errorf("open zip entry: %w", openErr)
-		}
-
-		// Extract to a temp file first, then move (handles sudo case)
-		tmpFile, tmpErr := os.CreateTemp("", "gonka-repair-bin-*")
-		if tmpErr != nil {
-			_ = rc.Close()
-			return fmt.Errorf("create temp binary: %w", tmpErr)
-		}
-		tmpPath := tmpFile.Name()
-
-		// Limit extraction to 500MB to prevent decompression bombs.
-		const maxBinarySize = 500 * 1024 * 1024
-		_, cpErr := io.Copy(tmpFile, io.LimitReader(rc, maxBinarySize))
-		_ = rc.Close()
-		_ = tmpFile.Close()
-		if cpErr != nil {
-			_ = os.Remove(tmpPath)
-			return fmt.Errorf("extract binary: %w", cpErr)
-		}
-
-		// Move to destination (may need sudo)
-		if useSudo {
-			moveCmd := exec.Command("sudo", "mv", tmpPath, destPath) // #nosec G204
-			if out, mvErr := moveCmd.CombinedOutput(); mvErr != nil {
-				_ = os.Remove(tmpPath)
-				return fmt.Errorf("move binary: %w\n%s", mvErr, string(out))
-			}
-		} else {
-			if mvErr := os.Rename(tmpPath, destPath); mvErr != nil {
-				// Fallback: copy if rename fails (cross-device)
-				if cpErr2 := copyFile(tmpPath, destPath); cpErr2 != nil {
-					_ = os.Remove(tmpPath)
-					return fmt.Errorf("move binary: %w", cpErr2)
-				}
-				_ = os.Remove(tmpPath)
-			}
-		}
-		return nil
-	}
-
-	return fmt.Errorf("binary %s not found in zip", binaryName)
-}
-
-// copyFile copies src to dst.
-func copyFile(src, dst string) error {
-	in, err := os.Open(src) // #nosec G304 - trusted path
-	if err != nil {
-		return err
-	}
-	defer func() { _ = in.Close() }()
-
-	out, err := os.Create(dst) // #nosec G304 - trusted path
-	if err != nil {
-		return err
-	}
-	defer func() { _ = out.Close() }()
-
-	_, err = io.Copy(out, in)
-	return err
-}
-
 // removeUpgradeInfo removes the stale upgrade-info.json file.
 func removeUpgradeInfo(ctx context.Context, state *config.State) error {
 	infoPath := filepath.Join(state.OutputDir, ".inference", "data", "upgrade-info.json")
-	return runHostCmd(ctx, state.UseSudo, state.OutputDir,
-		fmt.Sprintf("rm -f %s", shellQuote(infoPath)))
+	return cosmovisor.RunHostCmd(ctx, state.UseSudo, state.OutputDir,
+		fmt.Sprintf("rm -f %s", cosmovisor.ShellQuote(infoPath)))
 }
 
 // fixSymlinks fixes broken Cosmovisor current symlinks for both node and api.
@@ -925,7 +772,7 @@ func fixSymlinks(ctx context.Context, state *config.State, upgradeName string) {
 		}
 
 		symlinkPath := filepath.Join(cosmoDir, "current")
-		if err := fixCosmovisorSymlink(ctx, state, symlinkPath, upgradeDir); err != nil {
+		if err := cosmovisor.FixSymlink(ctx, state.UseSudo, state.OutputDir, symlinkPath, upgradeDir); err != nil {
 			ui.Warn("Could not fix %s symlink: %v", svc.name, err)
 		} else {
 			// Use relative path for display
@@ -933,18 +780,6 @@ func fixSymlinks(ctx context.Context, state *config.State, upgradeName string) {
 			ui.Success("Cosmovisor %s symlink -> %s", svc.name, relTarget)
 		}
 	}
-}
-
-// fixCosmovisorSymlink updates a Cosmovisor current symlink to point to target.
-func fixCosmovisorSymlink(ctx context.Context, state *config.State, symlinkPath, target string) error {
-	// Use relative symlink (Cosmovisor expects this)
-	relTarget, err := filepath.Rel(filepath.Dir(symlinkPath), target)
-	if err != nil {
-		relTarget = target
-	}
-
-	return runHostCmd(ctx, state.UseSudo, state.OutputDir,
-		fmt.Sprintf("ln -snf %s %s", shellQuote(relTarget), shellQuote(symlinkPath)))
 }
 
 // stopRepairNode stops the node container using only the first compose file.
@@ -1057,23 +892,6 @@ func verifyRecovery(ctx context.Context, state *config.State) {
 	}
 }
 
-// runHostCmd executes a shell command on the host, with sudo if needed.
-func runHostCmd(ctx context.Context, useSudo bool, dir, shellCmd string) error {
-	var cmd *exec.Cmd
-	if useSudo {
-		cmd = exec.CommandContext(ctx, "sudo", "sh", "-c", shellCmd) // #nosec G204
-	} else {
-		cmd = exec.CommandContext(ctx, "sh", "-c", shellCmd) // #nosec G204
-	}
-	cmd.Dir = dir
-
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s: %w\n%s", shellCmd, err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
 // readFileOptionalSudo reads a file, falling back to sudo cat if needed.
 func readFileOptionalSudo(ctx context.Context, state *config.State, path string) ([]byte, error) {
 	data, err := os.ReadFile(path) // #nosec G304 - path from trusted state
@@ -1090,11 +908,6 @@ func readFileOptionalSudo(ctx context.Context, state *config.State, path string)
 	defer cancel()
 	cmd := exec.CommandContext(catCtx, "sudo", "cat", path) // #nosec G204
 	return cmd.Output()
-}
-
-// shellQuote wraps a path in single quotes for shell safety.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 // resolveRepairAdmin returns the admin URL from flag, state, or default.

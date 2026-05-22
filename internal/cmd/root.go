@@ -1,10 +1,13 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/fatih/color"
+	"github.com/inc4/gonka-nop/internal/chain"
 	"github.com/inc4/gonka-nop/internal/config"
 	"github.com/inc4/gonka-nop/internal/status"
 	"github.com/spf13/cobra"
@@ -62,6 +65,9 @@ func init() {
 	rootCmd.AddCommand(mlNodeCmd)
 	rootCmd.AddCommand(repairCmd)
 	rootCmd.AddCommand(downloadModelCmd)
+	rootCmd.AddCommand(govmodelCmd)
+	rootCmd.AddCommand(collateralCmd)
+	rootCmd.AddCommand(repairPermissionsCmd)
 }
 
 // Execute runs the root command
@@ -138,10 +144,84 @@ func runStatus(_ *cobra.Command, _ []string) error {
 		if err != nil {
 			return fmt.Errorf("failed to fetch status: %w", err)
 		}
+
+		// M11/M12: enrich with per-governance-model state + chain's full
+		// governance-model list + collateral balance. All chain queries
+		// are best-effort — Display layer gracefully handles nil fields.
+		// AvailableGovernanceModels is fetched even when the participant
+		// has no delegations so fresh deploys see the chain's model menu
+		// and the `govmodel delegate` hint.
+		if state, _ := config.Load(outputDir); state != nil && state.ColdKeyAddress != "" {
+			if gms := fetchGovernanceModelsForStatus(state); gms != nil {
+				nodeStatus.GovernanceModels = gms
+			}
+			if avail := fetchAvailableGovernanceModelsForStatus(state); avail != nil {
+				nodeStatus.AvailableGovernanceModels = avail
+			}
+			if col := fetchCollateralForStatus(state); col != nil {
+				nodeStatus.Collateral = col
+			}
+		}
 	}
 
 	status.Display(nodeStatus)
 	return nil
+}
+
+// fetchCollateralForStatus is best-effort: any chain query failure
+// returns nil so the Display layer cleanly OMITS the section.
+func fetchCollateralForStatus(state *config.State) *status.CollateralInfo {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	qr := chain.QueryRunnerFromState(state)
+	bal, err := chain.GetCollateral(ctx, qr, state.ColdKeyAddress)
+	if err != nil {
+		return nil
+	}
+	return &status.CollateralInfo{
+		Amount: bal.Amount,
+		Denom:  bal.Denom,
+		Found:  bal.Found,
+	}
+}
+
+// fetchGovernanceModelsForStatus is best-effort: any chain query failure
+// returns nil so the Display layer cleanly OMITS the section. Defined in
+// cmd/ (not status/) to keep status independent of internal/chain.
+func fetchGovernanceModelsForStatus(state *config.State) []status.GovModelState {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	qr := chain.QueryRunnerFromState(state)
+	chainStates, err := chain.ListPoCDelegations(ctx, qr, state.ColdKeyAddress)
+	if err != nil || len(chainStates) == 0 {
+		return nil
+	}
+	out := make([]status.GovModelState, 0, len(chainStates))
+	for _, s := range chainStates {
+		out = append(out, status.GovModelState{
+			ModelID:    s.ModelID,
+			Delegate:   s.Delegate,
+			Refused:    s.Refused,
+			IntentOnly: s.IntentOnly,
+		})
+	}
+	return out
+}
+
+// fetchAvailableGovernanceModelsForStatus returns the chain's current set
+// of governance-approved model IDs (independent of this participant's
+// delegations). Used so fresh deploys see a populated Governance Models
+// section that lists the chain's menu plus the `govmodel delegate` hint.
+// Best-effort: nil on any query/parse failure.
+func fetchAvailableGovernanceModelsForStatus(state *config.State) []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	qr := chain.QueryRunnerFromState(state)
+	ids, err := chain.ListGovernanceModels(ctx, qr)
+	if err != nil || len(ids) == 0 {
+		return nil
+	}
+	return ids
 }
 
 // --- Reset Command ---

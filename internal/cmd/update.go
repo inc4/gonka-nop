@@ -41,10 +41,12 @@ Examples:
 }
 
 var (
-	updateCheck    bool
-	updateService  string
-	updateAdminURL string
-	updateYes      bool
+	updateCheck       bool
+	updateService     string
+	updateAdminURL    string
+	updateYes         bool
+	updateImage       string // M12 Slice 7: --image for --service api
+	updateAllowNonUps bool   // M12 Slice 7: --allow-non-upstream
 )
 
 func init() {
@@ -54,6 +56,13 @@ func init() {
 	// update command uses --admin-url as its own local flag.
 	updateCmd.Flags().StringVar(&updateAdminURL, "admin-url", defaultAdminURL, "Admin API URL")
 	updateCmd.Flags().BoolVarP(&updateYes, "yes", "y", false, "Skip confirmation prompts")
+
+	// M12 Slice 7: compose image swap for --service api.
+	updateCmd.Flags().StringVar(&updateImage, "image", "", "(--service api only) replace api image with this tag; must match upstream allowlist or pass --allow-non-upstream")
+	updateCmd.Flags().BoolVar(&updateAllowNonUps, "allow-non-upstream", false, "(--service api --image only) accept a non-upstream image; WARNs in output")
+
+	// M11: api-binary hotfix flags live in update_api.go for grep-ability.
+	registerUpdateAPIFlags()
 }
 
 // VersionDiff represents a version change for a single service.
@@ -65,6 +74,7 @@ type VersionDiff struct {
 	AutoUpdate bool // true for Cosmovisor-managed (node, api)
 }
 
+//nolint:gocyclo // dispatcher: each branch is a self-contained short-circuit (api-only, --service api --image, normal update flow)
 func runUpdate(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
 
@@ -79,6 +89,22 @@ func runUpdate(cmd *cobra.Command, _ []string) error {
 
 	if state.OutputDir == "" {
 		return fmt.Errorf("no deployment found in %s — run 'gonka-nop setup' first", outputDir)
+	}
+
+	// M11: --api-only short-circuits to the Cosmovisor hotfix installer.
+	// Mutually exclusive with --check (enforced by cobra) so we only land
+	// here when the operator explicitly asked for a hotfix.
+	if updateAPIOnly {
+		return runUpdateAPIOnly(ctx, state)
+	}
+
+	// M12 Slice 7: --service api --image short-circuits to compose-image
+	// swap (separate code path from --api-only Cosmovisor hotfix).
+	if updateImage != "" {
+		if !strings.EqualFold(updateService, "api") {
+			return fmt.Errorf("--image is only supported with --service api")
+		}
+		return runUpdateServiceImage(ctx, state)
 	}
 
 	// Determine network type for fetching correct versions

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/inc4/gonka-nop/internal/config"
@@ -31,7 +32,22 @@ var (
 	flagNetworkNodeURL   string
 	flagMLNodeImage      string
 	flagAttentionBackend string
+	flagSelectedModel    string
+
+	// M12 Slice 4: Postgres backend for devshardd payload storage.
+	// Empty flagPostgresHost selects the file backend (default).
+	// flagPostgresPassword may also be supplied via GONKA_POSTGRES_PASSWORD
+	// env var (scrubbed from env after read).
+	flagPostgresHost     string
+	flagPostgresPort     string
+	flagPostgresDB       string
+	flagPostgresUser     string
+	flagPostgresPassword string
 )
+
+// envPostgresPassword is the env var name read as fallback for
+// --postgres-password (NFR-M12-6 non-interactive contract).
+const envPostgresPassword = "GONKA_POSTGRES_PASSWORD" // #nosec G101 - env var NAME, not a credential value
 
 var setupCmd = &cobra.Command{
 	Use:   "setup",
@@ -86,6 +102,44 @@ func init() {
 	setupCmd.Flags().StringVar(&flagNetworkNodeURL, "network-node-url", "", "Network node Admin API URL (for mlnode-only)")
 	setupCmd.Flags().StringVar(&flagMLNodeImage, "mlnode-image", "", "Custom MLNode Docker image (e.g., ghcr.io/segovchik/gonka-b300-image:3.0.13-b300-tp1)")
 	setupCmd.Flags().StringVar(&flagAttentionBackend, "attention-backend", "", "vLLM attention backend (FLASHINFER or FLASH_ATTN)")
+	setupCmd.Flags().StringVar(&flagSelectedModel, "model", "", "Governance-approved model ID to deploy (e.g. moonshotai/Kimi-K2.6); rejects mismatched GPU architectures before any files are written")
+
+	// M12 devshardd Postgres backend (all optional; empty host = file backend).
+	setupCmd.Flags().StringVar(&flagPostgresHost, "postgres-host", "", "Postgres host for devshardd backend (empty = file backend, default)")
+	setupCmd.Flags().StringVar(&flagPostgresPort, "postgres-port", "", "Postgres port for devshardd backend (default 5432)")
+	setupCmd.Flags().StringVar(&flagPostgresDB, "postgres-db", "", "Postgres database name (default 'payloads')")
+	setupCmd.Flags().StringVar(&flagPostgresUser, "postgres-user", "", "Postgres user (default 'payloads')")
+	setupCmd.Flags().StringVar(&flagPostgresPassword, "postgres-password", "", "Postgres password (or set "+envPostgresPassword+" env var; scrubbed after read)")
+}
+
+// applyPostgresFlags reconciles --postgres-* flags and GONKA_POSTGRES_PASSWORD
+// env var into state.DevshardConfig. Returns a fatal error when
+// --postgres-host is set in --yes mode without a password from either
+// source (UC-2-A2). Scrubs the env var after reading so subprocesses do
+// not inherit it (NFR-M12-1).
+func applyPostgresFlags(state *config.State) error {
+	pw := flagPostgresPassword
+	if pw == "" {
+		if envVal := os.Getenv(envPostgresPassword); envVal != "" {
+			pw = envVal
+			_ = os.Unsetenv(envPostgresPassword)
+		}
+	}
+
+	if flagPostgresHost == "" && flagPostgresPort == "" && flagPostgresDB == "" && flagPostgresUser == "" && pw == "" {
+		return nil // no Postgres opt-in, file backend selected by default
+	}
+
+	if flagPostgresHost != "" && pw == "" && yesFlag {
+		return fmt.Errorf("--postgres-host requires a password (pass --postgres-password or set %s env var)", envPostgresPassword)
+	}
+
+	state.DevshardConfig.PostgresHost = flagPostgresHost
+	state.DevshardConfig.PostgresPort = flagPostgresPort
+	state.DevshardConfig.PostgresDB = flagPostgresDB
+	state.DevshardConfig.PostgresUser = flagPostgresUser
+	state.DevshardConfig.PostgresPassword = pw
+	return nil
 }
 
 // setupOverrides maps CLI flag values to ui prompt overrides.
@@ -159,6 +213,20 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 	// Set attention backend if provided (overrides auto-detection)
 	if flagAttentionBackend != "" {
 		state.AttentionBackend = flagAttentionBackend
+	}
+
+	// Set selected model if provided; phase 02 (GPU detection) honors this
+	// and passes it to recommendConfig as requestedModel for arch validation.
+	// Mismatched arch/VRAM → phase 02 returns error before any files are
+	// written (AC-M11-2 / UC-1-E2 fast-fail contract).
+	if flagSelectedModel != "" {
+		state.SelectedModel = flagSelectedModel
+	}
+
+	// M12: apply Postgres-backend flags (fatal in --yes mode if --postgres-host
+	// is set without a password from --postgres-password OR env var).
+	if err := applyPostgresFlags(state); err != nil {
+		return err
 	}
 
 	ui.Header("Gonka Node Setup")

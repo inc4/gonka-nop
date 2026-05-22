@@ -1,6 +1,7 @@
 package phases
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/inc4/gonka-nop/internal/config"
@@ -115,7 +116,10 @@ func TestRecommendConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := recommendConfig(tt.gpuCount, tt.vramMB, tt.arch, tt.hasNVLink)
+			rec, err := recommendConfig(tt.gpuCount, tt.vramMB, tt.arch, tt.hasNVLink, "")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
 			if rec.TP != tt.wantTP {
 				t.Errorf("TP = %d, want %d", rec.TP, tt.wantTP)
@@ -136,6 +140,89 @@ func TestRecommendConfig(t *testing.T) {
 				t.Errorf("MaxModelLen = %d, want %d", rec.MaxModelLen, tt.wantMaxModelLe)
 			}
 		})
+	}
+}
+
+// TestRecommendConfig_KimiArchValidation exercises the M11 Slice 2 recipe
+// gating: Kimi-K2.6 is rejected on non-Blackwell arch and accepted on Blackwell.
+func TestRecommendConfig_KimiArchValidation(t *testing.T) {
+	kimiID := "moonshotai/Kimi-K2.6"
+
+	t.Run("rejected on A100 (sm_80)", func(t *testing.T) {
+		_, err := recommendConfig(8, 81920, "sm_80", true, kimiID)
+		if err == nil {
+			t.Fatal("expected error for Kimi on sm_80")
+		}
+		if !strings.Contains(err.Error(), "sm_80") || !strings.Contains(err.Error(), "sm_100") {
+			t.Errorf("error message should mention both observed arch (sm_80) and required arch (sm_100): %v", err)
+		}
+	})
+
+	t.Run("rejected on H100 (sm_90)", func(t *testing.T) {
+		_, err := recommendConfig(8, 81920, "sm_90", true, kimiID)
+		if err == nil {
+			t.Fatal("expected error for Kimi on sm_90")
+		}
+	})
+
+	t.Run("accepted on B200 (sm_100)", func(t *testing.T) {
+		rec, err := recommendConfig(8, 81920, "sm_100", true, kimiID)
+		if err != nil {
+			t.Fatalf("unexpected error for Kimi on sm_100: %v", err)
+		}
+		if rec.Model != kimiID {
+			t.Errorf("Model = %q, want %q", rec.Model, kimiID)
+		}
+		// VLLMArgs-derived display fields:
+		if rec.TP != 4 {
+			t.Errorf("derived TP = %d, want 4 (from Kimi recipe args)", rec.TP)
+		}
+		if rec.MaxModelLen != 240000 {
+			t.Errorf("derived MaxModelLen = %d, want 240000", rec.MaxModelLen)
+		}
+		if rec.MemoryUtil < 0.94 || rec.MemoryUtil > 0.96 {
+			t.Errorf("derived MemoryUtil = %.2f, want ~0.95 (from Kimi recipe args)", rec.MemoryUtil)
+		}
+	})
+
+	t.Run("accepted on sm_120 (forward-looking Blackwell+) with sufficient VRAM", func(t *testing.T) {
+		// Hypothetical: 4x B300-class @ 96GB = 384GB total
+		_, err := recommendConfig(4, 98304, "sm_120", true, kimiID)
+		if err != nil {
+			t.Fatalf("unexpected error for Kimi on sm_120: %v", err)
+		}
+	})
+}
+
+// TestRecommendConfig_KimiVRAMRejection verifies the MinTotalVRAMGB gate.
+func TestRecommendConfig_KimiVRAMRejection(t *testing.T) {
+	// 2x B200 = 160GB < 320GB minimum
+	_, err := recommendConfig(2, 81920, "sm_100", true, "moonshotai/Kimi-K2.6")
+	if err == nil {
+		t.Fatal("expected VRAM-too-low error")
+	}
+	if !strings.Contains(err.Error(), "320") {
+		t.Errorf("error should mention required 320 GB minimum: %v", err)
+	}
+}
+
+// TestRecommendConfig_UnknownModel rejects unregistered requestedModel.
+func TestRecommendConfig_UnknownModel(t *testing.T) {
+	_, err := recommendConfig(8, 81920, "sm_100", true, "not/a/real/model")
+	if err == nil {
+		t.Fatal("expected error for unknown model")
+	}
+}
+
+// TestRecommendConfig_EmptyModelFallsBackToTier preserves NFR-M11-5
+// (legacy single-arg behavior unchanged when requestedModel is "").
+func TestRecommendConfig_EmptyModelFallsBackToTier(t *testing.T) {
+	rec, err := recommendConfig(8, 81920, "sm_80", true, "")
+	if err != nil {
+		t.Fatalf("unexpected error on legacy path: %v", err)
+	}
+	if rec.Model != "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8" {
+		t.Errorf("legacy tier picked %q, want Qwen3-235B (8x A100-80GB tier)", rec.Model)
 	}
 }
 
@@ -226,12 +313,41 @@ func TestSelectMLNodeImage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := selectMLNodeImage(tt.arch, tt.fetched, tt.registry)
+			got := selectMLNodeImage(tt.arch, tt.fetched, tt.registry, "")
 			if got != tt.want {
-				t.Errorf("selectMLNodeImage(%q, %q, %q) = %q, want %q", tt.arch, tt.fetched, tt.registry, got, tt.want)
+				t.Errorf("selectMLNodeImage(%q, %q, %q, \"\") = %q, want %q", tt.arch, tt.fetched, tt.registry, got, tt.want)
 			}
 		})
 	}
+}
+
+// TestSelectMLNodeImage_RecipeImageVariant verifies Review Notes F4:
+// when requestedModel resolves to a recipe with ImageVariant=="blackwell",
+// the blackwell image is selected even if the host arch is not Blackwell
+// (defensive — recommendConfig would have rejected such a host already).
+func TestSelectMLNodeImage_RecipeImageVariant(t *testing.T) {
+	t.Run("Kimi forces blackwell even on sm_80 host", func(t *testing.T) {
+		// Hypothetical: recommendConfig would reject this earlier, but
+		// the image selector is independently defensive.
+		got := selectMLNodeImage("sm_80", "3.0.12-post6", "", "moonshotai/Kimi-K2.6")
+		if got != "3.0.12-post6-blackwell" {
+			t.Errorf("got %q, want 3.0.12-post6-blackwell", got)
+		}
+	})
+
+	t.Run("Qwen3-235B on sm_80 stays standard (ImageVariant=standard)", func(t *testing.T) {
+		got := selectMLNodeImage("sm_80", "3.0.12-post6", "", "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8")
+		if got != "3.0.12-post6" {
+			t.Errorf("got %q, want 3.0.12-post6 (standard variant)", got)
+		}
+	})
+
+	t.Run("unknown model falls back to arch-based logic", func(t *testing.T) {
+		got := selectMLNodeImage("sm_80", "3.0.12-post6", "", "not/a/real/model")
+		if got != "3.0.12-post6" {
+			t.Errorf("got %q, want 3.0.12-post6 (arch fallback)", got)
+		}
+	})
 }
 
 func TestSelectAttentionBackend(t *testing.T) {

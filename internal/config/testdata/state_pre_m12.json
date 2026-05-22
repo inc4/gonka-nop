@@ -1,0 +1,11 @@
+{
+  "current_phase": "",
+  "completed_phases": ["prerequisites","gpu_detection","network_select","key_management","config_generation","deploy"],
+  "network": "mainnet",
+  "key_workflow": "quick",
+  "account_pubkey": "A8LK5/SoFXElGT5ZTfpmEHAEALvh8TiYoIGLGWX9kW2w",
+  "key_name": "gonka-node-warm",
+  "keyring_password": "fixture-password",
+  "output_dir": "/tmp/m12-test",
+  "public_ip": "1.2.3.4"
+}

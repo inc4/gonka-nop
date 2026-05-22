@@ -14,10 +14,13 @@ const (
 	testIP             = "10.0.0.1"
 	testAltIP          = "1.2.3.4"
 	testBeaconStateURL = "https://beaconstate.info/"
+	testKeyName        = "test-key"
+	testAccountPubKey  = "test-pub"  // #nosec G101 - test fixture, not a real credential
+	testKeyringPass    = "test-pass" // #nosec G101 - test fixture, not a real credential
 )
 
 func TestBuildVLLMArgs(t *testing.T) {
-	fp8Model := "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+	fp8Model := testnetLargeModel
 	nonFP8Model := "Qwen/QwQ-32B"
 
 	tests := []struct {
@@ -229,7 +232,7 @@ func TestGenerateConfigEnv(t *testing.T) {
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	state := config.NewState(tmpDir)
-	state.KeyName = "test-key"
+	state.KeyName = testKeyName
 	state.AccountPubKey = "gonka1abc123"
 	state.PublicIP = testIP
 	state.P2PPort = 5000
@@ -262,7 +265,8 @@ func TestGenerateConfigEnv(t *testing.T) {
 		{"MODEL_NAME", "MODEL_NAME=" + defaultModel},
 		{"VLLM_ATTENTION_BACKEND", "VLLM_ATTENTION_BACKEND=FLASHINFER"},
 		{"DDoS blocked routes", "GONKA_API_BLOCKED_ROUTES='poc-batches training'"},
-		{"DDoS exempt routes", "GONKA_API_EXEMPT_ROUTES='chat inference'"},
+		{"DDoS exempt routes (M12: incl. subnet+devshard)", "GONKA_API_EXEMPT_ROUTES='chat inference poc/proofs subnet devshard'"},
+		{"M12 conn limit", "EXEMPT_CONN_LIMIT=200"},
 		{"DISABLE_CHAIN_API", "DISABLE_CHAIN_API=true"},
 		{"DISABLE_CHAIN_GRPC", "DISABLE_CHAIN_GRPC=true"},
 		{"SYNC_WITH_SNAPSHOTS", "SYNC_WITH_SNAPSHOTS=true"},
@@ -313,7 +317,7 @@ func TestGenerateConfigEnv_NATPortSplit(t *testing.T) {
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	state := config.NewState(tmpDir)
-	state.KeyName = "test-key"
+	state.KeyName = testKeyName
 	state.AccountPubKey = "gonka1abc123"
 	state.PublicIP = testIP
 	// Simulate NAT: external ports differ from internal
@@ -488,6 +492,10 @@ func TestGenerateDockerCompose(t *testing.T) {
 	state.BridgeImageTag = "0.2.9-post2"
 	state.EthereumNetwork = networkMainnet
 	state.BeaconStateURL = testBeaconStateURL
+	// M12 versiond block requires populated key fields:
+	state.KeyName = testKeyName
+	state.AccountPubKey = testAccountPubKey
+	state.KeyringPassword = testKeyringPass
 
 	if err := generateDockerCompose(state); err != nil {
 		t.Fatalf("generateDockerCompose() error: %v", err)
@@ -551,6 +559,10 @@ func TestGenerateDockerCompose_NATInternalP2PPort(t *testing.T) {
 	// NAT scenario: external P2P is 19245, internal Docker binding is 5000
 	state.P2PPort = 19245
 	state.InternalP2PPort = 5000
+	// M12 versiond block requires populated key fields:
+	state.KeyName = testKeyName
+	state.AccountPubKey = testAccountPubKey
+	state.KeyringPassword = testKeyringPass
 
 	if err := generateDockerCompose(state); err != nil {
 		t.Fatalf("generateDockerCompose() error: %v", err)
@@ -579,7 +591,7 @@ func TestGenerateMLNodeCompose(t *testing.T) {
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	state := config.NewState(tmpDir)
-	state.SelectedModel = "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+	state.SelectedModel = testnetLargeModel
 	state.MLNodeImageTag = mlnodeBlackwellDefault
 	state.AttentionBackend = defaultAttentionBackend
 	state.HFHome = defaultHFHome
@@ -604,7 +616,7 @@ func TestGenerateMLNodeCompose(t *testing.T) {
 		{"Attention backend", "VLLM_ATTENTION_BACKEND=FLASHINFER"},
 		{"HF_HOME env", "HF_HOME=" + defaultHFHome},
 		{"HF_HOME volume", defaultHFHome + ":" + defaultHFHome},
-		{"Model name", "MODEL_NAME=Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"},
+		{"Model name", "MODEL_NAME=" + testnetLargeModel},
 		{"GPU reservation", "driver: nvidia"},
 		{"node-config volume", "node-config.json"},
 		{"config.env", "config.env"},
@@ -941,6 +953,10 @@ func TestGenerateDockerComposeNetworkOnly(t *testing.T) {
 	state.PublicIP = testAltIP
 	state.NetworkNodeIP = "10.0.1.50"
 	state.PersistentPeers = []string{"peer1@" + testAltIP + ":5000"}
+	// M12 versiond block requires populated key fields:
+	state.KeyName = testKeyName
+	state.AccountPubKey = testAccountPubKey
+	state.KeyringPassword = testKeyringPass
 
 	if err := generateDockerCompose(state); err != nil {
 		t.Fatalf("generateDockerCompose() error: %v", err)
