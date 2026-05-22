@@ -202,8 +202,11 @@ See [`docs/nop-guide.md`](docs/nop-guide.md) for full end-to-end walkthroughs pe
 ## Supported Models
 
 NOP auto-recommends a model based on detected GPUs and the chain's governance
-list. Override with `--model <id>` — NOP rejects mismatches before writing
-any config.
+list. In interactive setup it shows the recommendation and offers a picker
+filtered to **only the models your GPU architecture can serve** — pick any
+of those, or accept the recommendation by hitting Enter. Override
+non-interactively with `--model <id>`; NOP rejects mismatches before
+writing any config.
 
 | Model ID | Min VRAM/GPU | Min Total VRAM | GPU arch | Image variant |
 |---|---|---|---|---|

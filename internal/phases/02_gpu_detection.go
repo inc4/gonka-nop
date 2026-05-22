@@ -88,12 +88,38 @@ func (p *GPUDetection) Run(ctx context.Context, state *config.State) error {
 		ui.Error("%v", err)
 		return err
 	}
+	// Interactive model picker: when the operator did NOT pass --model and we
+	// have ≥2 arch-compatible recipes, let them override the auto-recommended
+	// choice. Skips in --yes (non-interactive) and when --model was supplied.
+	// If a non-default is chosen, re-run recommendConfig so TP/PP/memory and
+	// image-variant selection match the new model.
+	if state.SelectedModel == "" && !ui.IsNonInteractive() {
+		options := BuildModelMenuOptions(gpus[0].Architecture)
+		if len(options) > 1 {
+			chosen, perr := ui.SelectWithDefault(
+				"Select model to deploy",
+				options,
+				rec.Model,
+			)
+			if perr != nil {
+				return fmt.Errorf("model selection prompt: %w", perr)
+			}
+			if chosen != rec.Model {
+				state.SelectedModel = chosen
+				rec, err = recommendConfig(len(gpus), gpus[0].MemoryMB, gpus[0].Architecture, topology.HasNVLink, state.SelectedModel)
+				if err != nil {
+					ui.Error("%v", err)
+					return err
+				}
+			}
+		}
+	}
 	state.TPSize = rec.TP
 	state.PPSize = rec.PP
-	// Preserve pre-set SelectedModel (from --model flag or saved state) so
-	// the operator's choice survives phase 02 (Review Notes F5). When the
-	// flag was passed, recommendConfig already validated arch/VRAM and rec.Model
-	// equals state.SelectedModel; this guard makes the no-op explicit.
+	// Preserve pre-set SelectedModel (from --model flag, picker choice, or
+	// saved state) so the operator's choice survives phase 02 (Review Notes
+	// F5). When the flag was passed, recommendConfig already validated
+	// arch/VRAM and rec.Model equals state.SelectedModel.
 	if state.SelectedModel == "" {
 		state.SelectedModel = rec.Model
 	}
