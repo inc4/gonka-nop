@@ -10,6 +10,7 @@ matches your setup and follow the section start to finish.
 
 - [Topologies at a glance](#topologies-at-a-glance)
 - [Prerequisites](#prerequisites)
+- [Picking a model](#picking-a-model)
 - [Topology 1 — Full (single server)](#topology-1--full-single-server)
 - [Topology 2 — Multi-server (1 validator + N ML slaves)](#topology-2--multi-server-1-validator--n-ml-slaves)
 - [Topology 3 — Network-only validator (no local GPU)](#topology-3--network-only-validator-no-local-gpu)
@@ -51,6 +52,36 @@ Toolkit during setup (one confirmation prompt).
 
 Disk: 250+ GB free on the chain server (Cosmovisor keeps upgrade backups).
 HuggingFace cache (`HF_HOME`) needs ~220 GB for Qwen3-235B FP8.
+
+---
+
+## Picking a model
+
+NOP auto-recommends a model from the chain's governance-approved list
+based on the detected hardware, and you can override with
+`--model <id>`. NOP rejects mismatched architectures before writing any
+config — no half-deployed state.
+
+| Model ID | Min VRAM/GPU | Min Total VRAM | GPU arch | Notes |
+|---|---|---|---|---|
+| `Qwen/Qwen3-235B-A22B-Instruct-2507-FP8` | 40 GB | 320 GB | any (A100+, H100, H200, Blackwell) | Default for most fleets; ~220 GB HF cache |
+| `Qwen/Qwen3-32B-FP8` | 20 GB | 40 GB | any | Smaller model, lower VRAM bar |
+| `Qwen/QwQ-32B` | 20 GB | 80 GB | any | Reasoning variant |
+| `moonshotai/Kimi-K2.6` | 80 GB | 320 GB | **Blackwell only** (sm_100, sm_103, sm_120) | Refuses to deploy on Ampere/Hopper — NOP will hard-error |
+
+**Hardware ↔ model decision matrix**
+
+| Your hardware | Recommended model |
+|---|---|
+| 8×A100 80GB | Qwen3-235B-A22B-Instruct-2507-FP8 |
+| 8×H100 / H200 80GB | Qwen3-235B-A22B-Instruct-2507-FP8 |
+| 4–8× B200 / B300 | Kimi-K2.6 (best weight); Qwen3-235B also works |
+| 2× B200 / 4× consumer 24GB | Qwen3-32B-FP8 or QwQ-32B |
+
+For models you **cannot** run (e.g. Kimi on A100), see
+[Per-model governance opt-in](#per-model-governance-opt-in) — delegating
+to a Blackwell host that runs Kimi costs ~5% weight vs ~10% for refuse,
+~15% for doing nothing.
 
 ---
 
