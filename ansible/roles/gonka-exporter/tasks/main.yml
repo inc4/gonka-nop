@@ -1,0 +1,58 @@
+---
+- name: Create monitoring directory
+  ansible.builtin.file:
+    path: "{{ monitoring_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Check if configured Docker network exists
+  community.docker.docker_network_info:
+    name: "{{ gonka_network }}"
+  register: configured_network
+  failed_when: false
+
+- name: Search for Gonka Docker network
+  community.docker.docker_host_info:
+    networks: true
+    networks_filters:
+      name: "gonka"
+  register: docker_networks
+  when: not (configured_network.exists | default(false))
+
+- name: Set gonka_network from detected network
+  ansible.builtin.set_fact:
+    gonka_network: "{{ docker_networks.networks[0].Name }}"
+  when:
+    - not (configured_network.exists | default(false))
+    - docker_networks.networks | default([]) | length > 0
+
+- name: Deploy gonka-exporter docker-compose
+  ansible.builtin.template:
+    src: docker-compose.exporter.yml.j2
+    dest: "{{ monitoring_dir }}/docker-compose.exporter.yml"
+    mode: "0644"
+
+- name: Pull exporter image
+  community.docker.docker_image:
+    name: "{{ exporter_image }}"
+    tag: "{{ exporter_version }}"
+    source: pull
+    force_source: true
+
+- name: Start gonka-exporter
+  community.docker.docker_compose_v2:
+    project_src: "{{ monitoring_dir }}"
+    files:
+      - docker-compose.exporter.yml
+    state: present
+    pull: missing
+
+- name: Wait for exporter to be ready
+  ansible.builtin.uri:
+    url: "http://localhost:{{ exporter_port }}/healthz"
+    method: GET
+    status_code: 200
+  register: exporter_health
+  retries: 10
+  delay: 5
+  until: exporter_health.status == 200

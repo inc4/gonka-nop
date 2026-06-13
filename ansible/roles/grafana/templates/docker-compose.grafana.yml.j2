@@ -1,0 +1,18 @@
+services:
+  grafana:
+    image: {{ grafana_image }}
+    container_name: gonka-grafana
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD={{ grafana_admin_password }}
+      - GF_SERVER_HTTP_PORT={{ grafana_port }}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+    volumes:
+      - {{ monitoring_dir }}/grafana/data:/var/lib/grafana
+      - {{ monitoring_dir }}/grafana/provisioning:/etc/grafana/provisioning:ro
+      - {{ monitoring_dir }}/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    labels:
+      com.gonka.monitoring: "grafana"

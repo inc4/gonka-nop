@@ -1,0 +1,62 @@
+---
+# Remove monitoring stack completely
+# Usage: ansible-playbook playbooks/teardown.yml -l mainnet-2
+- name: Teardown Gonka monitoring
+  hosts: validators:monitoring_servers
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Stop and remove exporter containers
+      community.docker.docker_compose_v2:
+        project_src: "{{ monitoring_dir }}"
+        files:
+          - docker-compose.exporter.yml
+        state: absent
+      ignore_errors: true
+
+    - name: Stop and remove prometheus containers
+      community.docker.docker_compose_v2:
+        project_src: "{{ monitoring_dir }}"
+        files:
+          - docker-compose.prometheus.yml
+        state: absent
+      ignore_errors: true
+
+    - name: Stop and remove alertmanager containers
+      community.docker.docker_compose_v2:
+        project_src: "{{ monitoring_dir }}"
+        files:
+          - docker-compose.alertmanager.yml
+        state: absent
+      ignore_errors: true
+
+    - name: Stop and remove grafana containers
+      community.docker.docker_compose_v2:
+        project_src: "{{ monitoring_dir }}"
+        files:
+          - docker-compose.grafana.yml
+        state: absent
+      ignore_errors: true
+
+    - name: Confirm data removal
+      ansible.builtin.pause:
+        prompt: "Remove monitoring data (Prometheus TSDB, Grafana DB)? [yes/no]"
+      register: confirm_remove
+      when: not (ansible_skip_tags is defined and 'confirm' in ansible_skip_tags)
+
+    - name: Remove monitoring directory
+      ansible.builtin.file:
+        path: "{{ monitoring_dir }}"
+        state: absent
+      when: confirm_remove.user_input | default('no') == 'yes'
+
+    - name: Show status
+      ansible.builtin.debug:
+        msg: |
+          Monitoring containers removed.
+          {% if confirm_remove.user_input | default('no') == 'yes' %}
+          Data directory {{ monitoring_dir }} removed.
+          {% else %}
+          Data directory {{ monitoring_dir }} preserved (remove manually if needed).
+          {% endif %}

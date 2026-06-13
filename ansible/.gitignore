@@ -1,0 +1,7 @@
+# Operator inventory files (contain server IPs and credentials)
+inventory/hosts.yml
+inventory/client.yml
+inventory/*.secret.yml
+
+# Ansible runtime
+*.retry

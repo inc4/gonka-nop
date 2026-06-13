@@ -1,0 +1,54 @@
+---
+# Add a validator node to centralized monitoring
+# 1. Updates central Prometheus to accept remote writes
+# 2. Deploys exporter + prometheus-agent on the validator node
+#
+# Usage: ansible-playbook playbooks/add-node.yml -l mainnet-1 -e central_host=202.78.161.151
+
+- name: Update central Prometheus (enable remote write receiver)
+  hosts: monitoring_servers
+  become: true
+  gather_facts: false
+
+  roles:
+    - prometheus
+
+- name: Deploy exporter + prometheus-agent on validator node
+  hosts: "{{ target_hosts | default('validators:!monitoring_servers') }}"
+  become: true
+  gather_facts: true
+
+  vars:
+    central_host: "{{ hostvars[groups['monitoring_servers'][0]]['ansible_host'] }}"
+    remote_write_url: "http://{{ central_host }}:{{ prometheus_port | default(9090) }}/api/v1/write"
+
+  pre_tasks:
+    - name: Verify Docker is available
+      community.docker.docker_host_info:
+      register: docker_info
+
+  roles:
+    - gonka-exporter
+    - role: prometheus
+      vars:
+        prometheus_retention: "7d"
+
+  post_tasks:
+    - name: Verify metrics are being pushed
+      ansible.builtin.uri:
+        url: "http://localhost:{{ exporter_port }}/metrics"
+        method: GET
+        return_content: true
+      register: metrics_check
+
+    - name: Show status
+      ansible.builtin.debug:
+        msg: |
+          Node {{ node_alias }} monitoring deployed!
+
+          Exporter:      http://{{ ansible_host }}:{{ exporter_port }}/metrics
+          Node Exporter: http://{{ ansible_host }}:{{ node_exporter_port }}/metrics
+          Pushing to: {{ remote_write_url }}
+          Metrics:   {{ metrics_check.content | regex_findall('gonka_\\w+') | unique | length }} gonka_* metrics
+
+          View in Grafana: http://{{ central_host }}:{{ grafana_port | default(3000) }}

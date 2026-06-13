@@ -1,0 +1,58 @@
+---
+- name: Create prometheus directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ monitoring_dir }}/prometheus"
+    - "{{ monitoring_dir }}/prometheus/data"
+    - "{{ monitoring_dir }}/prometheus/rules"
+
+- name: Set prometheus data directory ownership (nobody:nobody = 65534)
+  ansible.builtin.file:
+    path: "{{ monitoring_dir }}/prometheus/data"
+    state: directory
+    owner: "65534"
+    group: "65534"
+    mode: "0755"
+  become: true
+
+- name: Deploy prometheus configuration
+  ansible.builtin.template:
+    src: prometheus.yml.j2
+    dest: "{{ monitoring_dir }}/prometheus/prometheus.yml"
+    mode: "0644"
+  notify: restart prometheus
+
+- name: Deploy alert rules
+  ansible.builtin.template:
+    src: alert-rules.yml.j2
+    dest: "{{ monitoring_dir }}/prometheus/rules/gonka-alerts.yml"
+    mode: "0644"
+  notify: restart prometheus
+
+- name: Deploy prometheus docker-compose
+  ansible.builtin.template:
+    src: docker-compose.prometheus.yml.j2
+    dest: "{{ monitoring_dir }}/docker-compose.prometheus.yml"
+    mode: "0644"
+
+- name: Start prometheus
+  community.docker.docker_compose_v2:
+    project_src: "{{ monitoring_dir }}"
+    files:
+      - docker-compose.prometheus.yml
+    state: present
+    pull: missing
+
+- name: Wait for prometheus to be ready
+  ansible.builtin.uri:
+    url: "http://localhost:{{ prometheus_port }}/-/ready"
+    method: GET
+    status_code: 200
+  register: prom_health
+  retries: 12
+  delay: 5
+  until: prom_health.status == 200
+

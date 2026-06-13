@@ -1,0 +1,19 @@
+services:
+  prometheus:
+    image: {{ prometheus_image }}
+    container_name: gonka-prometheus
+    network_mode: host
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time={{ prometheus_retention }}
+      - --web.listen-address=0.0.0.0:{{ prometheus_port }}
+      - --web.enable-lifecycle
+      - --web.enable-remote-write-receiver
+    volumes:
+      - {{ monitoring_dir }}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - {{ monitoring_dir }}/prometheus/rules:/etc/prometheus/rules:ro
+      - {{ monitoring_dir }}/prometheus/data:/prometheus
+    labels:
+      com.gonka.monitoring: "prometheus"

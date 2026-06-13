@@ -1,0 +1,118 @@
+groups:
+  - name: gonka_critical
+    rules:
+      - alert: GonkaMissRateHigh
+        expr: >
+          (gonka_participant_missed_requests > 0)
+          and
+          (gonka_participant_missed_requests
+           / (gonka_participant_inference_count + gonka_participant_missed_requests)
+           > 0.2)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Miss rate above 20% on {{ '{{ $labels.instance }}' }}"
+          description: >-
+            Miss rate at {{ '{{ $value | humanizePercentage }}' }}.
+            Check sync status, GPU health, and PUBLIC_URL reachability.
+
+      - alert: GonkaNodeFailed
+        expr: gonka_node_status == 5
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ML node FAILED on {{ '{{ $labels.instance }}' }}"
+          description: >-
+            Node {{ '{{ $labels.node_id }}' }} on {{ '{{ $labels.host }}' }}
+            is in FAILED state. Check container logs.
+
+      - alert: GonkaNodeStopped
+        expr: gonka_node_status == 4
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ML node STOPPED on {{ '{{ $labels.instance }}' }}"
+          description: >-
+            Node {{ '{{ $labels.node_id }}' }} has been stopped for 10+ minutes.
+
+      - alert: GonkaBlockLag
+        expr: (gonka_block_height_max - gonka_block_height) > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Node {{ '{{ $labels.instance }}' }} is {{ '{{ $value }}' }} blocks behind network"
+          description: >-
+            Local block height is significantly behind the network maximum.
+            Check persistent_peers and network connectivity.
+
+      - alert: GonkaBlockLagCritical
+        expr: (gonka_block_height_max - gonka_block_height) > 200
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Node {{ '{{ $labels.instance }}' }} is {{ '{{ $value }}' }} blocks behind (critical)"
+
+      - alert: GonkaCatchingUp
+        expr: gonka_chain_catching_up == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Node {{ '{{ $labels.instance }}' }} is syncing for 15+ minutes"
+
+      - alert: GonkaGPUUtilizationHigh
+        expr: gonka_node_gpu_avg_utilization_percent > 95
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU utilization sustained above 95% on {{ '{{ $labels.instance }}' }}"
+          description: >-
+            Average GPU utilization at {{ '{{ $value }}' }}%. OOM risk.
+            Consider reducing gpu-memory-utilization.
+
+      - alert: GonkaZeroWeight
+        expr: gonka_node_poc_weight == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Zero PoC weight on {{ '{{ $labels.instance }}' }} for 30+ minutes"
+          description: >-
+            Node {{ '{{ $labels.node_id }}' }} has zero PoC weight.
+            Check PUBLIC_URL reachability and PoC status.
+
+      - alert: GonkaZeroInferences
+        expr: gonka_participant_inference_count == 0
+        for: 45m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Zero inferences on {{ '{{ $labels.instance }}' }} for 45+ minutes"
+
+      - alert: GonkaStatusMismatch
+        expr: gonka_node_status != gonka_node_intended_status
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Status mismatch on {{ '{{ $labels.instance }}' }}"
+          description: >-
+            Current status does not match intended status for 15+ minutes.
+            Node may be stuck in a transition.
+
+  - name: gonka_exporter
+    rules:
+      - alert: GonkaExporterDown
+        expr: up{job="gonka-exporter"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gonka exporter is down on {{ '{{ $labels.instance }}' }}"
+          description: "Cannot scrape metrics. Check if exporter container is running."
