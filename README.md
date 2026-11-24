@@ -247,3 +247,5 @@ the **per-model governance opt-in** flow in [`docs/nop-guide.md`](docs/nop-guide
 ## License
 
 MIT License. See [LICENSE](LICENSE).
+
+Monitoring: [gonka-exporter-go](https://github.com/inc4/gonka-exporter-go). Request examples: [gonka-inference-examples](https://github.com/inc4/gonka-inference-examples).
